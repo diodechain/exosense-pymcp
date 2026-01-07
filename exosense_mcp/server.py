@@ -1,0 +1,733 @@
+"""
+MCP Server implementation for ExoSense using aiohttp.
+Compatible with Python 3.9+.
+"""
+import json
+import uuid
+import importlib.util
+import sys
+import logging
+import os
+import asyncio
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Callable
+from aiohttp import web
+from aiohttp.web_request import Request
+from aiohttp.web_response import Response
+import yaml
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+from .exosense_client import ExoSenseClient, GraphQLQuery
+from .types.auth import ExoSenseAuth, TokenAuth, ExoSenseConfig
+from .auth import authenticate
+
+# Configure logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+# Environment variable configuration
+EXOSENSE_API_URL = os.getenv("EXOSENSE_API_URL", "https://api.exosense.com")
+EXOSENSE_AUTH_TOKEN = os.getenv("EXOSENSE_AUTH_TOKEN")
+EXOSENSE_ORIGIN = os.getenv("EXOSENSE_ORIGIN", "https://exosense.com")
+PORT = int(os.getenv("PORT", "8080"))
+HTTP_STREAMING = os.getenv("HTTP_STREAMING")
+
+# Session storage (in production, use a proper session store)
+sessions: Dict[str, Dict[str, Any]] = {}
+
+# Dynamically loaded tools: {tool_name: {"metadata": {...}, "execute": callable}}
+TOOLS: Dict[str, Dict[str, Any]] = {}
+TOOL_FUNCTIONS: Dict[str, Callable] = {}
+
+# Global ExoSense client instance
+_exosense_client: Optional[ExoSenseClient] = None
+
+
+def get_exosense_client(auth: Optional[ExoSenseAuth] = None) -> ExoSenseClient:
+    """Initialize ExoSense client with authentication"""
+    global _exosense_client
+
+    if not _exosense_client or auth:
+        auth_to_use = auth or TokenAuth(
+            type="token",
+            token=EXOSENSE_AUTH_TOKEN or "",
+            origin=EXOSENSE_ORIGIN,
+        )
+
+        if not auth_to_use.origin:
+            auth_to_use.origin = EXOSENSE_ORIGIN
+
+        _exosense_client = ExoSenseClient(
+            ExoSenseConfig(
+                graphql_endpoint=EXOSENSE_API_URL,
+                auth=auth_to_use,
+            )
+        )
+
+    return _exosense_client
+
+
+def load_config(config_path: str = "config.yml") -> Dict[str, Any]:
+    """Load configuration from YAML file."""
+    # Resolve config path relative to project root (where config.yml should be)
+    # __file__ is exosense_mcp/server.py, so parent.parent is project root
+    project_root = Path(__file__).parent.parent
+    config_file = project_root / config_path
+    
+    if not config_file.exists():
+        # Try current working directory as fallback
+        config_file = Path(config_path)
+        if not config_file.exists():
+            # Create default config if it doesn't exist
+            logger.warning(f"Config file not found: {config_path}")
+            return {"tools": []}
+    
+    logger.debug(f"Loading config from: {config_file}")
+    with open(config_file, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def load_tool_module(tool_file: str) -> tuple:
+    """
+    Dynamically load a tool module from a file path.
+    Returns (tool_metadata, execute_function)
+    
+    All paths are resolved relative to the project root (exosense-pymcp directory).
+    tool_file should be like "exosense_mcp/tools/current_user.py"
+    """
+    # Resolve paths relative to project root
+    # __file__ is exosense_mcp/server.py, so parent is exosense_mcp/, parent.parent is project root
+    project_root = Path(__file__).parent.parent
+    exosense_mcp_dir = Path(__file__).parent
+    
+    # Determine the full module path for proper package structure
+    # tool_file is like "exosense_mcp/tools/current_user.py"
+    # We need to convert it to "exosense_mcp.tools.current_user"
+    if tool_file.startswith("exosense_mcp/"):
+        # Remove .py extension and convert / to .
+        module_path = tool_file.replace("/", ".").replace(".py", "")
+        # Resolve file path relative to project root
+        tool_path = project_root / tool_file
+    else:
+        # Try relative to exosense_mcp directory
+        tool_path = exosense_mcp_dir / tool_file
+        if not tool_path.exists():
+            # Try as absolute path
+            tool_path = Path(tool_file)
+            if not tool_path.exists():
+                raise FileNotFoundError(f"Tool file not found: {tool_file}")
+        
+        # Extract module name from path relative to project root
+        try:
+            tool_path = tool_path.resolve()
+            project_root = project_root.resolve()
+            relative_path = tool_path.relative_to(project_root)
+            module_path = str(relative_path).replace("/", ".").replace(".py", "")
+        except ValueError:
+            # If path is not relative to project root, infer module name
+            if "exosense_mcp" in str(tool_path):
+                parts = tool_path.parts
+                idx = parts.index("exosense_mcp") if "exosense_mcp" in parts else -1
+                if idx >= 0:
+                    module_path = ".".join(parts[idx:]).replace(".py", "")
+                else:
+                    module_path = f"exosense_mcp.tools.{tool_path.stem}"
+            else:
+                module_path = f"exosense_mcp.tools.{tool_path.stem}"
+    
+    if not tool_path.exists():
+        raise FileNotFoundError(f"Tool file not found: {tool_path}")
+    
+    logger.debug(f"Loading tool module: {module_path} from {tool_path}")
+    
+    # Try to import the module normally first (this preserves package structure)
+    # This works because exosense_mcp is a proper Python package
+    try:
+        module = importlib.import_module(module_path)
+        logger.debug(f"Successfully imported {module_path} via normal import")
+    except ImportError as e:
+        # If normal import fails, try loading from file location
+        logger.debug(f"Normal import failed for {module_path}, trying file-based load: {e}")
+        
+        # Ensure parent packages exist in sys.modules
+        parts = module_path.split(".")
+        for i in range(1, len(parts)):
+            parent_module = ".".join(parts[:i])
+            if parent_module not in sys.modules:
+                try:
+                    importlib.import_module(parent_module)
+                except ImportError:
+                    # Create a minimal package module
+                    parent_mod = type(sys)(parent_module)
+                    parent_mod.__name__ = parent_module
+                    parent_mod.__package__ = ".".join(parts[:i-1]) if i > 1 else parts[0]
+                    if i == 1:  # exosense_mcp
+                        parent_mod.__path__ = [str(exosense_mcp_dir)]
+                    elif i == 2:  # exosense_mcp.tools
+                        parent_mod.__path__ = [str(exosense_mcp_dir / "tools")]
+                    sys.modules[parent_module] = parent_mod
+        
+        # Load from file location
+        spec = importlib.util.spec_from_file_location(module_path, tool_path)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not load module from {tool_file}")
+        
+        module = importlib.util.module_from_spec(spec)
+        if "." in module_path:
+            module.__package__ = ".".join(module_path.split(".")[:-1])
+        module.__name__ = module_path
+        sys.modules[module_path] = module
+        spec.loader.exec_module(module)
+        logger.debug(f"Successfully loaded {module_path} from file")
+    
+    # Get metadata and execute function
+    if not hasattr(module, 'TOOL_METADATA'):
+        raise AttributeError(f"Tool module {tool_file} must define TOOL_METADATA")
+    if not hasattr(module, 'execute'):
+        raise AttributeError(f"Tool module {tool_file} must define execute() function")
+    
+    return module.TOOL_METADATA, module.execute
+
+
+def load_tools_from_config(config_path: str = "config.yml"):
+    """Load all tools from config.yml."""
+    global TOOLS, TOOL_FUNCTIONS
+    
+    config = load_config(config_path)
+    tools_config = config.get("tools", [])
+    
+    TOOLS = {}
+    TOOL_FUNCTIONS = {}
+    
+    for tool_entry in tools_config:
+        tool_file = tool_entry.get("file")
+        tool_name = tool_entry.get("name")
+        
+        if not tool_file or not tool_name:
+            logger.warning(f"Skipping invalid tool entry: {tool_entry}")
+            continue
+        
+        try:
+            metadata, execute_func = load_tool_module(tool_file)
+            
+            # Verify the tool name matches
+            if metadata.get("name") != tool_name:
+                logger.warning(f"Tool name mismatch in {tool_file}. Expected {tool_name}, got {metadata.get('name')}")
+            
+            TOOLS[tool_name] = metadata
+            TOOL_FUNCTIONS[tool_name] = execute_func
+            logger.info(f"Loaded tool: {tool_name} from {tool_file}")
+            
+        except Exception as e:
+            logger.error(f"Error loading tool {tool_name} from {tool_file}: {e}")
+            continue
+
+
+# Load tools on module import
+load_tools_from_config()
+
+
+def create_jsonrpc_response(request_id: Any, result: Any = None, error: Optional[Dict] = None) -> Dict:
+    """Create a JSON-RPC 2.0 response."""
+    response = {
+        "jsonrpc": "2.0",
+        "id": request_id
+    }
+    if error:
+        response["error"] = error
+    else:
+        response["result"] = result
+    return response
+
+
+def create_text_content(text: str) -> List[Dict[str, str]]:
+    """Create MCP text content format."""
+    return [{"type": "text", "text": text}]
+
+
+async def handle_initialize(request: Request) -> Response:
+    """Handle initialize method."""
+    try:
+        data = await request.json()
+        request_id = data.get("id")
+        params = data.get("params", {})
+        
+        logger.info(f"🔧 Initialize request - ID: {request_id}")
+        logger.debug(f"   Params: {json.dumps(params, indent=2)}")
+        
+        # Generate session ID
+        session_id = str(uuid.uuid4())
+        
+        # Extract authentication from headers if available
+        auth = None
+        is_private_http_streaming = HTTP_STREAMING == "Private"
+        
+        logger.debug(f"   HTTP_STREAMING mode: {HTTP_STREAMING}")
+        logger.debug(f"   Is private mode: {is_private_http_streaming}")
+        
+        if is_private_http_streaming and EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
+            # Use env vars for authentication
+            logger.info("   Using .env authentication (Private mode)")
+            auth = TokenAuth(
+                type="token",
+                token=EXOSENSE_AUTH_TOKEN,
+                origin=EXOSENSE_ORIGIN,
+            )
+        else:
+            # Try to get auth from headers
+            logger.info("   Attempting to extract auth from headers")
+            try:
+                request_headers = dict(request.headers)
+                logger.debug(f"   Request headers: {request_headers}")
+                auth_result = await authenticate(request_headers)
+                if auth_result and "authorization" in auth_result:
+                    auth = auth_result["authorization"]
+                    logger.info("   ✅ Auth extracted from headers")
+                else:
+                    logger.info("   ⚠️  No auth found in headers")
+            except Exception as e:
+                logger.warning(f"   ⚠️  Auth extraction failed: {e}")
+                pass  # Auth will be None, will use default if available
+        
+        sessions[session_id] = {
+            "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+            "clientInfo": params.get("clientInfo", {}),
+            "authorization": auth,
+        }
+        client_name = params.get('clientInfo', {}).get('name', 'unknown')
+        logger.info(f"✅ New session created: {session_id} (client: {client_name})")
+        
+        result = {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "exosense-mcp-server",
+                "version": "1.0.0"
+            }
+        }
+        
+        response_data = create_jsonrpc_response(request_id, result)
+        
+        return web.Response(
+            text=json.dumps(response_data),
+            content_type="application/json",
+            headers={"Mcp-Session-Id": session_id}
+        )
+    except Exception as e:
+        logger.error(f"Error in initialize: {e}", exc_info=True)
+        return web.Response(
+            text=json.dumps(create_jsonrpc_response(
+                data.get("id") if 'data' in locals() else None,
+                error={"code": -32603, "message": f"Internal error: {str(e)}"}
+            )),
+            content_type="application/json",
+            status=500
+        )
+
+
+async def handle_tools_list(request: Request) -> Response:
+    """Handle tools/list method."""
+    try:
+        data = await request.json()
+        request_id = data.get("id")
+        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or request.headers.get("MCP-Session-Id")
+        
+        logger.info(f"📋 Tools/list request - ID: {request_id}, Session: {session_id}")
+        logger.debug(f"   All headers: {dict(request.headers)}")
+        logger.info(f"   Tools available: {len(TOOLS)}")
+        
+        # Verify session
+        if not session_id or session_id not in sessions:
+            logger.warning(f"   ❌ Invalid or missing session: {session_id}")
+            logger.debug(f"   Active sessions: {list(sessions.keys())}")
+            return web.Response(
+                text=json.dumps(create_jsonrpc_response(
+                    request_id,
+                    error={
+                        "code": -32000,
+                        "message": "Invalid or missing session. Please call 'initialize' first."
+                    }
+                )),
+                content_type="application/json",
+                status=401
+            )
+        
+        # Return list of tools
+        tools_list = list(TOOLS.values())
+        result = {"tools": tools_list}
+        
+        logger.info(f"   ✅ Returning {len(tools_list)} tools")
+        logger.debug(f"   Tool names: {[t.get('name') for t in tools_list]}")
+        
+        response_data = create_jsonrpc_response(request_id, result)
+        
+        return web.Response(
+            text=json.dumps(response_data),
+            content_type="application/json",
+            headers={"Mcp-Session-Id": session_id}
+        )
+    except Exception as e:
+        logger.error(f"Error in tools/list: {e}", exc_info=True)
+        return web.Response(
+            text=json.dumps(create_jsonrpc_response(
+                data.get("id") if 'data' in locals() else None,
+                error={"code": -32603, "message": f"Internal error: {str(e)}"}
+            )),
+            content_type="application/json",
+            status=500
+        )
+
+
+async def handle_tools_call(request: Request) -> Response:
+    """Handle tools/call method."""
+    try:
+        data = await request.json()
+        request_id = data.get("id")
+        params = data.get("params", {})
+        
+        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or request.headers.get("MCP-Session-Id")
+        
+        # Verify session
+        if not session_id:
+            return web.Response(
+                text=json.dumps(create_jsonrpc_response(
+                    request_id,
+                    error={
+                        "code": -32000,
+                        "message": "Missing session ID. Please call 'initialize' first to establish a session."
+                    }
+                )),
+                content_type="application/json",
+                status=401
+            )
+        
+        if session_id not in sessions:
+            return web.Response(
+                text=json.dumps(create_jsonrpc_response(
+                    request_id,
+                    error={
+                        "code": -32000,
+                        "message": f"Invalid or expired session. Please call 'initialize' to create a new session."
+                    }
+                )),
+                content_type="application/json",
+                status=401
+            )
+        
+        tool_name = params.get("name")
+        arguments = params.get("arguments", {})
+        
+        logger.info(f"Tool call: {tool_name} with args: {arguments}")
+        
+        # Check if tool exists
+        if tool_name not in TOOL_FUNCTIONS:
+            return web.Response(
+                text=json.dumps(create_jsonrpc_response(
+                    request_id,
+                    error={"code": -32601, "message": f"Unknown tool: {tool_name}"}
+                )),
+                content_type="application/json",
+                status=400
+            )
+        
+        # Get the tool's execute function and metadata
+        execute_func = TOOL_FUNCTIONS[tool_name]
+        tool_metadata = TOOLS.get(tool_name, {})
+        input_schema = tool_metadata.get("inputSchema", {})
+        required_params = input_schema.get("required", [])
+        
+        # Validate required arguments
+        if required_params:
+            missing_params = [param for param in required_params if param not in arguments]
+            if missing_params:
+                return web.Response(
+                    text=json.dumps(create_jsonrpc_response(
+                        request_id,
+                        error={
+                            "code": -32602,
+                            "message": f"Missing required arguments: {', '.join(missing_params)}"
+                        }
+                    )),
+                    content_type="application/json",
+                    status=400
+                )
+        
+        # Get session for authentication context
+        session = sessions[session_id]
+        auth = session.get("authorization")
+        
+        # Create a context object for tools (similar to ToolContext)
+        class ToolContext:
+            def __init__(self, session_auth):
+                self.session = {"authorization": session_auth} if session_auth else None
+                self.log = logger
+                self.report_progress = lambda progress: None  # Placeholder
+        
+        context = ToolContext(auth)
+        
+        # Execute the tool
+        try:
+            # Check if execute function is async
+            import inspect
+            if inspect.iscoroutinefunction(execute_func):
+                result_data = await execute_func(arguments, context)
+            else:
+                result_data = execute_func(arguments, context)
+            
+            # Convert result to JSON string for text content
+            if isinstance(result_data, dict) and "content" in result_data:
+                # Already in MCP format
+                content = result_data["content"]
+            elif isinstance(result_data, (dict, list)):
+                result_text = json.dumps(result_data, indent=2)
+                content = create_text_content(result_text)
+            else:
+                result_text = str(result_data)
+                content = create_text_content(result_text)
+            
+            result = {"content": content}
+            
+        except Exception as e:
+            logger.error(f"Exception executing tool {tool_name}: {e}", exc_info=True)
+            error_response = create_jsonrpc_response(
+                request_id,
+                error={"code": -32603, "message": f"Tool execution error: {str(e)}"}
+            )
+            return web.Response(
+                text=json.dumps(error_response),
+                content_type="application/json",
+                status=500
+            )
+        
+        response_data = create_jsonrpc_response(request_id, result)
+        
+        return web.Response(
+            text=json.dumps(response_data),
+            content_type="application/json",
+            headers={"Mcp-Session-Id": session_id}
+        )
+    except Exception as e:
+        logger.error(f"Error in tools/call: {e}", exc_info=True)
+        return web.Response(
+            text=json.dumps(create_jsonrpc_response(
+                data.get("id") if 'data' in locals() else None,
+                error={"code": -32603, "message": f"Internal error: {str(e)}"}
+            )),
+            content_type="application/json",
+            status=500
+        )
+
+
+@web.middleware
+async def cors_middleware(request: Request, handler):
+    """Middleware to add CORS headers to all responses."""
+    # Handle OPTIONS preflight requests
+    if request.method == "OPTIONS":
+        logger.info("🔍 OPTIONS request (CORS preflight)")
+        return web.Response(
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type, Mcp-Session-Id, x-automation-token, origin",
+                "Access-Control-Max-Age": "3600"
+            }
+        )
+    
+    # Process request and add CORS headers to response
+    response = await handler(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Mcp-Session-Id, x-automation-token, origin"
+    return response
+
+
+@web.middleware
+async def logging_middleware(request: Request, handler):
+    """Middleware to log all incoming requests."""
+    # Log request details
+    logger.info("=" * 80)
+    logger.info(f"📥 INCOMING REQUEST: {request.method} {request.path_qs}")
+    logger.info(f"   Remote: {request.remote}")
+    logger.info(f"   URL: {request.url}")
+    logger.info(f"   Headers: {dict(request.headers)}")
+    
+    # Process request
+    try:
+        response = await handler(request)
+        logger.info(f"📤 RESPONSE: Status {response.status}")
+        if response.headers:
+            logger.debug(f"   Response Headers: {dict(response.headers)}")
+        logger.info("=" * 80)
+        return response
+    except Exception as e:
+        logger.error(f"❌ ERROR in handler: {e}", exc_info=True)
+        logger.info("=" * 80)
+        raise
+
+
+async def handle_mcp_request(request: Request) -> Response:
+    """Main MCP request handler - routes to appropriate method handler."""
+    try:
+        data = await request.json()
+        method = data.get("method")
+        request_id = data.get("id")
+        
+        logger.info(f"🔍 Processing MCP request: method={method}, id={request_id}")
+        logger.debug(f"   Full request data: {json.dumps(data, indent=2)}")
+        
+        if method == "initialize":
+            logger.info("   → Routing to initialize handler")
+            return await handle_initialize(request)
+        elif method == "tools/list":
+            logger.info("   → Routing to tools/list handler")
+            return await handle_tools_list(request)
+        elif method == "tools/call":
+            logger.info("   → Routing to tools/call handler")
+            return await handle_tools_call(request)
+        else:
+            logger.warning(f"   ⚠️  Unknown method: {method}")
+            return web.Response(
+                text=json.dumps(create_jsonrpc_response(
+                    request_id,
+                    error={"code": -32601, "message": f"Method not found: {method}"}
+                )),
+                content_type="application/json",
+                status=404
+            )
+    except json.JSONDecodeError as e:
+        logger.error(f"❌ JSON decode error: {e}")
+        return web.Response(
+            text=json.dumps(create_jsonrpc_response(
+                None,
+                error={"code": -32700, "message": "Parse error"}
+            )),
+            content_type="application/json",
+            status=400
+        )
+    except Exception as e:
+        logger.error(f"❌ Error in handle_mcp_request: {e}", exc_info=True)
+        return web.Response(
+            text=json.dumps(create_jsonrpc_response(
+                None,
+                error={"code": -32603, "message": f"Internal error: {str(e)}"}
+            )),
+            content_type="application/json",
+            status=500
+        )
+
+
+def create_app() -> web.Application:
+    """Create the aiohttp application."""
+    # Middlewares are applied in reverse order
+    app = web.Application(middlewares=[logging_middleware, cors_middleware])
+    app.router.add_post("/mcp", handle_mcp_request)
+    
+    # Add a simple health check endpoint
+    async def health_check(request: Request) -> Response:
+        logger.info("🏥 Health check requested")
+        return web.Response(
+            text=json.dumps({
+                "status": "ok",
+                "tools_loaded": len(TOOLS),
+                "sessions_active": len(sessions)
+            }),
+            content_type="application/json"
+        )
+    
+    app.router.add_get("/health", health_check)
+    app.router.add_get("/", health_check)  # Also respond to root
+    
+    return app
+
+
+async def test_connection() -> None:
+    """Test connection to ExoSense before starting server"""
+    if not EXOSENSE_API_URL:
+        print("⚠️  EXOSENSE_API_URL not set - connection test skipped", file=sys.stderr)
+        return
+
+    try:
+        print("🔌 Testing connection to ExoSense...", file=sys.stderr)
+        print(f"   API URL: {EXOSENSE_API_URL}", file=sys.stderr)
+        print(f"   Origin: {EXOSENSE_ORIGIN or 'not set'}", file=sys.stderr)
+        print(
+            f"   Auth Token: {'***' + EXOSENSE_AUTH_TOKEN[-4:] if EXOSENSE_AUTH_TOKEN else 'not set'}",
+            file=sys.stderr,
+        )
+
+        if HTTP_STREAMING == "Private":
+            print("   Mode: HTTP Streaming (Private - using .env authentication)", file=sys.stderr)
+        else:
+            use_stdio_mode = bool(EXOSENSE_ORIGIN and EXOSENSE_AUTH_TOKEN)
+            print(f"   Mode: {'STDIO' if use_stdio_mode else 'HTTP Streaming'}", file=sys.stderr)
+
+        # Only test if we have auth credentials
+        if EXOSENSE_AUTH_TOKEN:
+            test_client = get_exosense_client()
+            result = await test_client.query(
+                GraphQLQuery(
+                    query="""
+                    query GetCurrentUser {
+                      currentUser {
+                        id
+                        email
+                      }
+                    }
+                    """,
+                    operation_name="GetCurrentUser",
+                )
+            )
+
+            if result.get("currentUser"):
+                user = result["currentUser"]
+                print(f"✅ Successfully connected to ExoSense", file=sys.stderr)
+                print(f"   User: {user.get('email') or user.get('id')}", file=sys.stderr)
+            else:
+                print("⚠️  Connection test returned no user data", file=sys.stderr)
+        else:
+            print("ℹ️  No auth token provided - connection test skipped (HTTP mode)", file=sys.stderr)
+    except Exception as error:
+        print("❌ Failed to connect to ExoSense:", file=sys.stderr)
+        print(f"   {str(error)}", file=sys.stderr)
+        print("   Please check your configuration in .env file", file=sys.stderr)
+
+
+def main():
+    """Main entry point for the server"""
+    # Test connection first
+    asyncio.run(test_connection())
+
+    app = create_app()
+    logger.info("=" * 80)
+    logger.info("🚀 STARTING EXOSENSE MCP SERVER")
+    logger.info("=" * 80)
+    logger.info(f"📍 Server URL: http://127.0.0.1:{PORT}/mcp")
+    logger.info(f"📍 Health check: http://127.0.0.1:{PORT}/health")
+    logger.info(f"🔧 Tools loaded: {len(TOOLS)}")
+    if TOOLS:
+        logger.info(f"   Tool names: {', '.join(TOOLS.keys())}")
+    logger.info(f"📊 Log level: {LOG_LEVEL}")
+    logger.info(f"🌐 HTTP_STREAMING mode: {HTTP_STREAMING or 'Client Auth'}")
+    logger.info("=" * 80)
+    logger.info("👂 Listening for connections...")
+    logger.info("=" * 80)
+    print(f"\n🚀 Starting ExoSense MCP server in HTTP streaming mode on port {PORT}...", file=sys.stderr)
+    print(f"✅ ExoSense MCP server started (HTTP mode on port {PORT})", file=sys.stderr)
+    print(f"   Endpoint: http://localhost:{PORT}/mcp", file=sys.stderr)
+    print(f"   Health: http://localhost:{PORT}/health", file=sys.stderr)
+    print(f"   Tools loaded: {len(TOOLS)}", file=sys.stderr)
+    web.run_app(app, host="127.0.0.1", port=PORT)
+
+
+if __name__ == "__main__":
+    main()

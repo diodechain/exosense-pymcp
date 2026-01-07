@@ -1,0 +1,37 @@
+# MCP Server Configuration
+# Lists all available tools and their file locations
+
+tools:
+  - file: exosense_mcp/tools/current_user.py
+    name: exosense-current-user
+  - file: exosense_mcp/tools/root_group.py
+    name: exosense-get-root-group
+  - file: exosense_mcp/tools/groups.py
+    name: exosense-get-groups
+  - file: exosense_mcp/tools/products.py
+    name: exosense-get-products
+  - file: exosense_mcp/tools/devices.py
+    name: exosense-get-devices
+  - file: exosense_mcp/tools/assets.py
+    name: exosense-get-assets
+  - file: exosense_mcp/tools/asset_details.py
+    name: exosense-get-asset-details
+  - file: exosense_mcp/tools/find_asset.py
+    name: exosense-find-asset
+  - file: exosense_mcp/tools/asset_statuses.py
+    name: exosense-get-asset-statuses
+  - file: exosense_mcp/tools/insight_modules.py
+    name: exosense-get-insight-modules
+  - file: exosense_mcp/tools/insight_module.py
+    name: exosense-get-insight-module
+  - file: exosense_mcp/tools/asset_historical_data.py
+    name: exosense-get-asset-historical-data
+  - file: exosense_mcp/tools/work_instructions.py
+    name: exosense-get-work-instructions
+  - file: exosense_mcp/tools/conditions.py
+    name: exosense-get-conditions
+  - file: exosense_mcp/tools/condition_comments.py
+    name: exosense-get-condition-comments
+  - file: exosense_mcp/tools/event_logs.py
+    name: exosense-get-event-logs
+

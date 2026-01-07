@@ -1,6 +1,6 @@
 """Utility functions for ExoSense MCP server"""
 
-from typing import Any, Dict
+from typing import Any, Dict, Union, Optional
 from datetime import datetime
 
 from .types.auth import ExoSenseAuth, TokenAuth
@@ -24,7 +24,7 @@ def create_token_auth(token: str, origin: str = "https://exosense.com") -> Token
 
 
 def format_error_response(
-    error: Exception | str, context: Dict[str, Any] | None = None
+    error: Union[Exception, str], context: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Format error response for MCP"""
     import json
@@ -50,7 +50,7 @@ def format_error_response(
     }
 
 
-def format_success_response(data: Any, message: str | None = None) -> Dict[str, Any]:
+def format_success_response(data: Any, message: Optional[str] = None) -> Dict[str, Any]:
     """Format success response for MCP"""
     import json
     return {

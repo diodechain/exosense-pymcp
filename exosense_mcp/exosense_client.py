@@ -20,7 +20,7 @@ class GraphQLError(BaseModel):
 
     message: str
     locations: Optional[list[Dict[str, int]]] = None
-    path: Optional[list[str | int]] = None
+    path: Optional[list[Union[str, int]]] = None
     extensions: Optional[Dict[str, Any]] = None
 
 

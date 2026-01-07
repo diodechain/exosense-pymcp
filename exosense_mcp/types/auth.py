@@ -1,6 +1,6 @@
 """Authentication types for ExoSense API"""
 
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 from pydantic import BaseModel
 
 
@@ -30,7 +30,7 @@ class OAuthAuth(BaseModel):
 
 
 # Union type for all supported authentication methods
-ExoSenseAuth = TokenAuth | APIKeyAuth | OAuthAuth
+ExoSenseAuth = Union[TokenAuth, APIKeyAuth, OAuthAuth]
 
 
 class ExoSenseConfig(BaseModel):

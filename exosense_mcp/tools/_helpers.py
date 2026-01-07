@@ -1,6 +1,6 @@
 """Helper functions for tools"""
 
-from typing import Dict, Any, Type
+from typing import Dict, Any, Type, Union, Optional
 from pydantic import BaseModel
 import json
 
@@ -10,7 +10,7 @@ def pydantic_to_json_schema(model_class: Type[BaseModel]) -> Dict[str, Any]:
     return model_class.model_json_schema()
 
 
-def format_success_response(data: Any, message: str | None = None) -> Dict[str, Any]:
+def format_success_response(data: Any, message: Optional[str] = None) -> Dict[str, Any]:
     """Format success response for MCP"""
     return {
         "content": [
@@ -29,7 +29,7 @@ def format_success_response(data: Any, message: str | None = None) -> Dict[str, 
     }
 
 
-def format_error_response(error: Exception | str) -> Dict[str, Any]:
+def format_error_response(error: Union[Exception, str]) -> Dict[str, Any]:
     """Format error response for MCP"""
     message = str(error) if isinstance(error, Exception) else error
     return {

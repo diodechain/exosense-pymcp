@@ -152,6 +152,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetDetailsParams)
 TOOL_METADATA = {
     "name": "exosense-get-asset-details",
-    "description": "Get high-level statistics about a specific asset from ExoSense. Can be retrieved by either asset ID (UUID) or asset name (exact match).",
+    "description": "Get latest data and statistics for a specific asset. Returns asset summary with latest data points from all signals (value, timestamp, signal name). Use this tool when asked about 'latest data', 'current readings', 'sensor values', or 'what is the data from X'. Accepts either asset_id (UUID) or asset_name (exact match). For health/status/connectivity information, use exosense-get-asset-statuses instead.",
     "inputSchema": schema
 }

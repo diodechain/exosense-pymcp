@@ -152,6 +152,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetsParams)
 TOOL_METADATA = {
     "name": "exosense-get-assets",
-    "description": "Get a summary of assets from ExoSense (names and IDs only) with optional filtering. Returns only asset names, IDs, descriptions, and locked status - not the full configuration. Requires pagination parameters (limit and offset) for all requests.",
+    "description": "Get a summary of assets from ExoSense (names and IDs only) with optional filtering. Returns only asset names, IDs, descriptions, and locked status - not the full configuration. Requires pagination parameters (limit and offset) for all requests. NOTE: For checking asset health, use 'exosense-get-asset-statuses' directly - it fetches assets internally and doesn't require calling this tool first.",
     "inputSchema": schema
 }

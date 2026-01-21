@@ -9,6 +9,7 @@ import sys
 import logging
 import os
 import asyncio
+import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Callable
 from aiohttp import web
@@ -16,6 +17,16 @@ from aiohttp.web_request import Request
 from aiohttp.web_response import Response
 import yaml
 from dotenv import load_dotenv
+
+# Optional hot-reload support
+try:
+    from watchdog.observers import Observer
+    from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+    WATCHDOG_AVAILABLE = True
+except ImportError:
+    WATCHDOG_AVAILABLE = False
+    Observer = None
+    FileSystemEventHandler = None
 
 # Load environment variables
 load_dotenv()
@@ -197,15 +208,37 @@ def load_tool_module(tool_file: str) -> tuple:
     return module.TOOL_METADATA, module.execute
 
 
-def load_tools_from_config(config_path: str = "config.yml"):
+def reload_tool_module(module_path: str):
+    """Reload a tool module by removing it from sys.modules and reimporting"""
+    # Remove from sys.modules to force reload
+    if module_path in sys.modules:
+        del sys.modules[module_path]
+    # Also remove parent packages if they're tool modules
+    parts = module_path.split(".")
+    for i in range(len(parts), 0, -1):
+        parent = ".".join(parts[:i])
+        if parent.startswith("exosense_mcp.tools.") and parent in sys.modules:
+            # Only remove tool modules, not the main package
+            if parent != "exosense_mcp.tools":
+                del sys.modules[parent]
+
+
+def load_tools_from_config(config_path: str = "config.yml", reload: bool = False):
     """Load all tools from config.yml."""
     global TOOLS, TOOL_FUNCTIONS
+    
+    if reload:
+        logger.info("🔄 Reloading tools from config...")
+        # Clear existing tools
+        TOOLS = {}
+        TOOL_FUNCTIONS = {}
     
     config = load_config(config_path)
     tools_config = config.get("tools", [])
     
-    TOOLS = {}
-    TOOL_FUNCTIONS = {}
+    if not reload:
+        TOOLS = {}
+        TOOL_FUNCTIONS = {}
     
     for tool_entry in tools_config:
         tool_file = tool_entry.get("file")
@@ -216,6 +249,19 @@ def load_tools_from_config(config_path: str = "config.yml"):
             continue
         
         try:
+            # If reloading, clear the module from cache first
+            if reload:
+                # Determine module path
+                project_root = Path(__file__).parent.parent
+                tool_path = project_root / tool_file
+                if tool_path.exists():
+                    try:
+                        relative_path = tool_path.relative_to(project_root)
+                        module_path = str(relative_path).replace("/", ".").replace(".py", "")
+                        reload_tool_module(module_path)
+                    except Exception as e:
+                        logger.debug(f"Could not reload module {tool_file}: {e}")
+            
             metadata, execute_func = load_tool_module(tool_file)
             
             # Verify the tool name matches
@@ -224,15 +270,135 @@ def load_tools_from_config(config_path: str = "config.yml"):
             
             TOOLS[tool_name] = metadata
             TOOL_FUNCTIONS[tool_name] = execute_func
-            logger.info(f"Loaded tool: {tool_name} from {tool_file}")
+            logger.info(f"{'🔄 Reloaded' if reload else 'Loaded'} tool: {tool_name} from {tool_file}")
             
         except Exception as e:
             logger.error(f"Error loading tool {tool_name} from {tool_file}: {e}")
             continue
+    
+    if reload:
+        logger.info(f"✅ Reload complete: {len(TOOLS)} tools loaded")
 
 
 # Load tools on module import
 load_tools_from_config()
+
+
+# File watcher for hot-reloading (optional, requires watchdog)
+if WATCHDOG_AVAILABLE:
+    class ToolReloadHandler(FileSystemEventHandler):
+        """Handler for file system events to reload tools"""
+        
+        def __init__(self, config_path: str, project_root: Path):
+            self.config_path = config_path
+            self.project_root = project_root
+            self.last_reload = {}
+            self.debounce_seconds = 1.0  # Debounce rapid file changes
+            
+        def on_modified(self, event):
+            """Handle file modification events"""
+            if event.is_directory:
+                return
+            
+            file_path = Path(event.src_path)
+            
+            # Check if it's config.yml
+            if file_path.name == "config.yml" or str(file_path) == str(self.project_root / self.config_path):
+                self._reload_config()
+                return
+            
+            # Check if it's a tool file
+            if file_path.suffix == ".py" and "tools" in str(file_path):
+                # Debounce: only reload if enough time has passed
+                import time
+                current_time = time.time()
+                file_str = str(file_path)
+                
+                if file_str in self.last_reload:
+                    if current_time - self.last_reload[file_str] < self.debounce_seconds:
+                        return  # Too soon, skip
+                
+                self.last_reload[file_str] = current_time
+                self._reload_tool(file_path)
+        
+        def _reload_config(self):
+            """Reload all tools from config"""
+            logger.info("📝 config.yml changed, reloading all tools...")
+            try:
+                load_tools_from_config(self.config_path, reload=True)
+                logger.info(f"✅ Reloaded {len(TOOLS)} tools")
+            except Exception as e:
+                logger.error(f"❌ Error reloading tools: {e}", exc_info=True)
+        
+        def _reload_tool(self, tool_path: Path):
+            """Reload a specific tool file"""
+            # Find which tool this file corresponds to
+            try:
+                relative_path = tool_path.relative_to(self.project_root)
+                tool_file = str(relative_path).replace("\\", "/")
+                
+                # Find in config
+                config = load_config(self.config_path)
+                tools_config = config.get("tools", [])
+                
+                for tool_entry in tools_config:
+                    if tool_entry.get("file") == tool_file:
+                        tool_name = tool_entry.get("name")
+                        logger.info(f"📝 Tool file changed: {tool_file}, reloading tool: {tool_name}")
+                        try:
+                            load_tools_from_config(self.config_path, reload=True)
+                            logger.info(f"✅ Reloaded tool: {tool_name}")
+                        except Exception as e:
+                            logger.error(f"❌ Error reloading tool {tool_name}: {e}", exc_info=True)
+                        return
+                
+                logger.debug(f"File changed but not in config: {tool_file}")
+            except Exception as e:
+                logger.debug(f"Could not determine tool for file {tool_path}: {e}")
+    
+    def start_file_watcher(config_path: str = "config.yml"):
+        """Start watching for file changes to enable hot-reloading"""
+        if not WATCHDOG_AVAILABLE:
+            logger.warning("⚠️  Hot-reload disabled: watchdog not installed. Install with: pip install watchdog")
+            return None
+        
+        project_root = Path(__file__).parent.parent
+        config_file = project_root / config_path
+        
+        # Watch config file and tools directory
+        event_handler = ToolReloadHandler(config_path, project_root)
+        observer = Observer()
+        
+        # Watch config file
+        if config_file.exists():
+            observer.schedule(event_handler, config_file.parent, recursive=False)
+            logger.info(f"👀 Watching config file: {config_file}")
+        
+        # Watch tools directory
+        tools_dir = project_root / "exosense_mcp" / "tools"
+        if tools_dir.exists():
+            observer.schedule(event_handler, tools_dir, recursive=False)
+            logger.info(f"👀 Watching tools directory: {tools_dir}")
+        
+        observer.start()
+        logger.info("🔄 Hot-reload enabled: tools will reload automatically on file changes")
+        return observer
+    
+    def stop_file_watcher(observer):
+        """Stop the file watcher"""
+        if observer:
+            observer.stop()
+            observer.join()
+            logger.info("🛑 File watcher stopped")
+else:
+    def start_file_watcher(config_path: str = "config.yml"):
+        """Placeholder when watchdog is not available"""
+        logger.warning("⚠️  Hot-reload disabled: watchdog not installed. Install with: pip install watchdog")
+        return None
+    
+    def stop_file_watcher(observer):
+        """Placeholder when watchdog is not available"""
+        pass
 
 
 def create_jsonrpc_response(request_id: Any, result: Any = None, error: Optional[Dict] = None) -> Dict:
@@ -260,7 +426,7 @@ async def handle_initialize(request: Request) -> Response:
         request_id = data.get("id")
         params = data.get("params", {})
         
-        logger.info(f"🔧 Initialize request - ID: {request_id}")
+        logger.debug(f"🔧 Initialize request - ID: {request_id}")
         logger.debug(f"   Params: {json.dumps(params, indent=2)}")
         
         # Generate session ID
@@ -275,7 +441,7 @@ async def handle_initialize(request: Request) -> Response:
         
         if is_private_http_streaming and EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
             # Use env vars for authentication
-            logger.info("   Using .env authentication (Private mode)")
+            logger.debug("   Using .env authentication (Private mode)")
             auth = TokenAuth(
                 type="token",
                 token=EXOSENSE_AUTH_TOKEN,
@@ -303,7 +469,7 @@ async def handle_initialize(request: Request) -> Response:
             "authorization": auth,
         }
         client_name = params.get('clientInfo', {}).get('name', 'unknown')
-        logger.info(f"✅ New session created: {session_id} (client: {client_name})")
+        logger.debug(f"✅ New session created: {session_id} (client: {client_name})")
         
         result = {
             "protocolVersion": "2024-11-05",
@@ -342,9 +508,9 @@ async def handle_tools_list(request: Request) -> Response:
         request_id = data.get("id")
         session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or request.headers.get("MCP-Session-Id")
         
-        logger.info(f"📋 Tools/list request - ID: {request_id}, Session: {session_id}")
+        logger.debug(f"📋 Tools/list request - ID: {request_id}, Session: {session_id}")
         logger.debug(f"   All headers: {dict(request.headers)}")
-        logger.info(f"   Tools available: {len(TOOLS)}")
+        logger.debug(f"   Tools available: {len(TOOLS)}")
         
         # Verify session
         if not session_id or session_id not in sessions:
@@ -366,7 +532,7 @@ async def handle_tools_list(request: Request) -> Response:
         tools_list = list(TOOLS.values())
         result = {"tools": tools_list}
         
-        logger.info(f"   ✅ Returning {len(tools_list)} tools")
+        logger.debug(f"   ✅ Returning {len(tools_list)} tools")
         logger.debug(f"   Tool names: {[t.get('name') for t in tools_list]}")
         
         response_data = create_jsonrpc_response(request_id, result)
@@ -554,24 +720,34 @@ async def cors_middleware(request: Request, handler):
 @web.middleware
 async def logging_middleware(request: Request, handler):
     """Middleware to log all incoming requests."""
-    # Log request details
-    logger.info("=" * 80)
-    logger.info(f"📥 INCOMING REQUEST: {request.method} {request.path_qs}")
-    logger.info(f"   Remote: {request.remote}")
-    logger.info(f"   URL: {request.url}")
-    logger.info(f"   Headers: {dict(request.headers)}")
+    # Only log routine operations at DEBUG level
+    is_routine = request.path_qs == "/mcp" and request.method == "POST"
+    
+    if is_routine:
+        logger.debug(f"📥 Request: {request.method} {request.path_qs}")
+    else:
+        logger.info("=" * 80)
+        logger.info(f"📥 INCOMING REQUEST: {request.method} {request.path_qs}")
+        logger.info(f"   Remote: {request.remote}")
+        logger.info(f"   URL: {request.url}")
+        logger.debug(f"   Headers: {dict(request.headers)}")
     
     # Process request
     try:
         response = await handler(request)
-        logger.info(f"📤 RESPONSE: Status {response.status}")
-        if response.headers:
-            logger.debug(f"   Response Headers: {dict(response.headers)}")
-        logger.info("=" * 80)
+        if is_routine:
+            logger.debug(f"📤 Response: {response.status}")
+        else:
+            logger.info(f"📤 RESPONSE: Status {response.status}")
+            if response.headers:
+                logger.debug(f"   Response Headers: {dict(response.headers)}")
+        if not is_routine:
+            logger.info("=" * 80)
         return response
     except Exception as e:
         logger.error(f"❌ ERROR in handler: {e}", exc_info=True)
-        logger.info("=" * 80)
+        if not is_routine:
+            logger.info("=" * 80)
         raise
 
 
@@ -582,14 +758,19 @@ async def handle_mcp_request(request: Request) -> Response:
         method = data.get("method")
         request_id = data.get("id")
         
-        logger.info(f"🔍 Processing MCP request: method={method}, id={request_id}")
-        logger.debug(f"   Full request data: {json.dumps(data, indent=2)}")
+        # Only log routine operations at DEBUG level
+        is_routine = method in ("initialize", "tools/list")
+        if is_routine:
+            logger.debug(f"🔍 Processing MCP request: method={method}, id={request_id}")
+        else:
+            logger.info(f"🔍 Processing MCP request: method={method}, id={request_id}")
+            logger.debug(f"   Full request data: {json.dumps(data, indent=2)}")
         
         if method == "initialize":
-            logger.info("   → Routing to initialize handler")
+            logger.debug("   → Routing to initialize handler")
             return await handle_initialize(request)
         elif method == "tools/list":
-            logger.info("   → Routing to tools/list handler")
+            logger.debug("   → Routing to tools/list handler")
             return await handle_tools_list(request)
         elif method == "tools/call":
             logger.info("   → Routing to tools/call handler")
@@ -629,7 +810,11 @@ async def handle_mcp_request(request: Request) -> Response:
 def create_app() -> web.Application:
     """Create the aiohttp application."""
     # Middlewares are applied in reverse order
+    # Disable aiohttp's built-in access logger to reduce verbosity
     app = web.Application(middlewares=[logging_middleware, cors_middleware])
+    # Disable aiohttp access logger
+    aiohttp_access_logger = logging.getLogger("aiohttp.access")
+    aiohttp_access_logger.setLevel(logging.WARNING)  # Only show warnings/errors
     app.router.add_post("/mcp", handle_mcp_request)
     
     # Add a simple health check endpoint
@@ -707,6 +892,11 @@ def main():
     # Test connection first
     asyncio.run(test_connection())
 
+    # Start file watcher for hot-reloading (if available)
+    observer = None
+    if os.getenv("HOT_RELOAD", "true").lower() in ("true", "1", "yes"):
+        observer = start_file_watcher()
+    
     app = create_app()
     logger.info("=" * 80)
     logger.info("🚀 STARTING EXOSENSE MCP SERVER")
@@ -718,6 +908,8 @@ def main():
         logger.info(f"   Tool names: {', '.join(TOOLS.keys())}")
     logger.info(f"📊 Log level: {LOG_LEVEL}")
     logger.info(f"🌐 HTTP_STREAMING mode: {HTTP_STREAMING or 'Client Auth'}")
+    if observer:
+        logger.info("🔄 Hot-reload: ENABLED (set HOT_RELOAD=false to disable)")
     logger.info("=" * 80)
     logger.info("👂 Listening for connections...")
     logger.info("=" * 80)
@@ -726,7 +918,15 @@ def main():
     print(f"   Endpoint: http://localhost:{PORT}/mcp", file=sys.stderr)
     print(f"   Health: http://localhost:{PORT}/health", file=sys.stderr)
     print(f"   Tools loaded: {len(TOOLS)}", file=sys.stderr)
-    web.run_app(app, host="127.0.0.1", port=PORT)
+    if observer:
+        print(f"   Hot-reload: ENABLED", file=sys.stderr)
+    
+    try:
+        web.run_app(app, host="127.0.0.1", port=PORT)
+    except KeyboardInterrupt:
+        logger.info("🛑 Shutting down server...")
+    finally:
+        stop_file_watcher(observer)
 
 
 if __name__ == "__main__":

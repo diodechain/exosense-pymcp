@@ -432,36 +432,37 @@ async def handle_initialize(request: Request) -> Response:
         # Generate session ID
         session_id = str(uuid.uuid4())
         
-        # Extract authentication from headers if available
+        # Extract authentication: try headers first, fall back to .env
+        # This supports hybrid single/multi-tenant: IT can set default in .env,
+        # but clients can override with their own credentials
         auth = None
-        is_private_http_streaming = HTTP_STREAMING == "Private"
         
-        logger.debug(f"   HTTP_STREAMING mode: {HTTP_STREAMING}")
-        logger.debug(f"   Is private mode: {is_private_http_streaming}")
+        # First, try to get auth from headers (client-provided, multi-tenant style)
+        logger.debug("   Attempting to extract auth from headers")
+        try:
+            request_headers = dict(request.headers)
+            logger.debug(f"   Request headers: {list(request_headers.keys())}")
+            auth_result = await authenticate(request_headers)
+            if auth_result and "authorization" in auth_result:
+                auth = auth_result["authorization"]
+                logger.info("   ✅ Auth extracted from headers (client-provided)")
+            else:
+                logger.debug("   No auth found in headers")
+        except Exception as e:
+            logger.debug(f"   Auth extraction from headers failed: {e}")
+            # Continue to fallback
         
-        if is_private_http_streaming and EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
-            # Use env vars for authentication
-            logger.debug("   Using .env authentication (Private mode)")
-            auth = TokenAuth(
-                type="token",
-                token=EXOSENSE_AUTH_TOKEN,
-                origin=EXOSENSE_ORIGIN,
-            )
-        else:
-            # Try to get auth from headers
-            logger.info("   Attempting to extract auth from headers")
-            try:
-                request_headers = dict(request.headers)
-                logger.debug(f"   Request headers: {request_headers}")
-                auth_result = await authenticate(request_headers)
-                if auth_result and "authorization" in auth_result:
-                    auth = auth_result["authorization"]
-                    logger.info("   ✅ Auth extracted from headers")
-                else:
-                    logger.info("   ⚠️  No auth found in headers")
-            except Exception as e:
-                logger.warning(f"   ⚠️  Auth extraction failed: {e}")
-                pass  # Auth will be None, will use default if available
+        # If no auth from headers, fall back to .env variables (IT-provided default)
+        if not auth:
+            if EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
+                logger.debug("   Using .env authentication (fallback/default)")
+                auth = TokenAuth(
+                    type="token",
+                    token=EXOSENSE_AUTH_TOKEN,
+                    origin=EXOSENSE_ORIGIN,
+                )
+            else:
+                logger.warning("   ⚠️  No authentication available (neither headers nor .env)")
         
         sessions[session_id] = {
             "protocolVersion": params.get("protocolVersion", "2024-11-05"),
@@ -631,6 +632,16 @@ async def handle_tools_call(request: Request) -> Response:
         # Get session for authentication context
         session = sessions[session_id]
         auth = session.get("authorization")
+        
+        # If no auth in session, fall back to .env (hybrid mode support)
+        # This allows tools to work even if client didn't provide headers
+        if not auth and EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
+            logger.debug(f"   No session auth, using .env fallback")
+            auth = TokenAuth(
+                type="token",
+                token=EXOSENSE_AUTH_TOKEN,
+                origin=EXOSENSE_ORIGIN,
+            )
         
         # Create a context object for tools (similar to ToolContext)
         class ToolContext:
@@ -850,11 +861,12 @@ async def test_connection() -> None:
             file=sys.stderr,
         )
 
-        if HTTP_STREAMING == "Private":
-            print("   Mode: HTTP Streaming (Private - using .env authentication)", file=sys.stderr)
+        # Display authentication mode
+        if EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
+            print("   Auth Mode: Hybrid (headers first, .env fallback)", file=sys.stderr)
+            print("   Default credentials available from .env", file=sys.stderr)
         else:
-            use_stdio_mode = bool(EXOSENSE_ORIGIN and EXOSENSE_AUTH_TOKEN)
-            print(f"   Mode: {'STDIO' if use_stdio_mode else 'HTTP Streaming'}", file=sys.stderr)
+            print("   Auth Mode: Client-provided only (no .env fallback)", file=sys.stderr)
 
         # Only test if we have auth credentials
         if EXOSENSE_AUTH_TOKEN:
@@ -908,6 +920,10 @@ def main():
         logger.info(f"   Tool names: {', '.join(TOOLS.keys())}")
     logger.info(f"📊 Log level: {LOG_LEVEL}")
     logger.info(f"🌐 HTTP_STREAMING mode: {HTTP_STREAMING or 'Client Auth'}")
+    if EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN:
+        logger.info("🔑 Hybrid auth mode: Headers first, .env fallback enabled")
+    else:
+        logger.info("🔑 Auth mode: Client-provided only (no .env fallback)")
     if observer:
         logger.info("🔄 Hot-reload: ENABLED (set HOT_RELOAD=false to disable)")
     logger.info("=" * 80)

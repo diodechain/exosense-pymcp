@@ -57,20 +57,27 @@ The server can be configured using environment variables. You can set them in on
 - `EXOSENSE_ORIGIN`: Host name of the solution being referenced (default: `https://exosense.com`)
 - `EXOSENSE_AUTH_TOKEN`: Default authentication token (optional, required for private mode)
 - `PORT`: Server port (default: `8080`)
-- `HTTP_STREAMING`: Set to `"Private"` to force HTTP streaming mode with `.env` authentication (optional)
+- `HTTP_STREAMING`: Set to `"Private"` for backward compatibility (optional, no longer required for auth mode)
 
-### Server Mode Selection
+### Hybrid Authentication Mode
 
-The server automatically selects the authentication mode based on environment variables:
+The server uses a **hybrid authentication approach** that supports both single-tenant and multi-tenant scenarios:
 
-1. **HTTP Streaming (Private Mode)**: If `HTTP_STREAMING=Private` is set, the server will:
-   - Use `EXOSENSE_ORIGIN` and `EXOSENSE_AUTH_TOKEN` from `.env` for authentication
-   - Allow clients to connect without providing authentication headers
-   - Perfect for local development where you want HTTP mode without client configuration
+1. **Client-Provided Auth (Multi-Tenant)**: If a client provides authentication headers:
+   - The server will use the client's credentials from headers
+   - Supports `x-automation-token` + `x-origin` OR `Authorization: Automation <token>` + `origin`
+   - Each client session can have different credentials
+   - Perfect for SaaS platforms or multi-organization deployments
 
-2. **HTTP Streaming (Client Auth)**: If `HTTP_STREAMING` is not set to `"Private"`, the server will:
-   - Use HTTP streaming mode
-   - Require clients to provide authentication headers (`x-automation-token` and `origin`)
+2. **Environment Fallback (Single-Tenant Default)**: If no auth headers are provided:
+   - The server falls back to `EXOSENSE_ORIGIN` and `EXOSENSE_AUTH_TOKEN` from `.env`
+   - IT can set a default API key without exposing it to clients
+   - Clients can still override by providing their own headers
+   - Perfect for internal tools or when you want a default tenant
+
+**Priority**: Headers (client-provided) → `.env` variables (IT-provided default)
+
+This allows IT to configure a default API key in `.env` for convenience, while still allowing pipelines and clients to use their own credentials when needed.
 
 ## Usage
 

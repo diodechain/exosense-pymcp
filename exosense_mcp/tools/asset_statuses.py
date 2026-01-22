@@ -15,7 +15,7 @@ class AssetStatusesParams(BaseModel):
     asset_ids: Optional[List[str]] = Field(None, description="Optional list of specific asset IDs (UUIDs) to check. If not provided, will automatically fetch and check all assets (up to max_assets limit). You do NOT need to call get-assets first - this tool handles asset fetching internally.")
     max_assets: Optional[int] = Field(100, ge=1, le=500, description="Maximum number of assets to check when asset_ids is not provided (default: 100, max: 500). Only used when asset_ids is not provided.")
     extra_status_data: Optional[bool] = Field(False, description="Get additional status data (up to 5 entries instead of 1) for more detailed historical status information")
-    include_details: Optional[bool] = Field(False, description="Include detailed lists of assets (assets_with_issues_details, assets_offline_details, assets_healthy_details). Default is false for concise responses. Set to true when user asks for specific asset names or details.")
+    include_details: Optional[bool] = Field(False, description="CRITICAL: Set to true when user asks for 'more details', 'which assets', 'list of assets', 'specific assets', 'provide details about [category]', 'which assets are [condition]', or ANY question asking for asset names or specific asset information. When true, includes assets_with_issues_details, assets_by_category_level (for filtering by category/level), assets_offline_details, and assets_healthy_details. Default is false for concise overview responses.")
 
 
 async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
@@ -120,15 +120,24 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         
         if not asset_ids_to_check:
             context.log.info(f"=== STARTING ASSET FETCH (max: {args.max_assets}) ===")
-            # Fetch assets in batches to avoid overwhelming the LLM
-            batch_size = 100
+            # Fetch assets in smaller batches to avoid memory issues
+            # Reduced from 100 to 50 to prevent "Exceeded allotted memory" errors
+            batch_size = 50
             all_asset_ids = []
             offset = 0
             
             while len(all_asset_ids) < args.max_assets:
                 context.log.info(f"Fetching batch at offset {offset}, limit {batch_size}")
                 pagination = Pagination(limit=batch_size, offset=offset)
-                assets_query = get_assets(filters={}, options={}, pagination=pagination)
+                # Use minimal options to reduce memory usage - only fetch id and name
+                minimal_options = {
+                    "includeTemplates": False,
+                    "includeParent": False,
+                    "includeMeta": False,
+                    "includeLocation": False,
+                    "includeData": False,
+                }
+                assets_query = get_assets(filters={}, options=minimal_options, pagination=pagination)
                 context.log.info(f"Executing GraphQL query...")
                 assets_result = await client.query(assets_query)
                 context.log.info(f"GraphQL query completed. Response type: {type(assets_result)}")
@@ -249,7 +258,16 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             batch_size = 50
             for i in range(0, len(asset_ids_to_check), batch_size):
                 batch_ids = asset_ids_to_check[i:i + batch_size]
-                assets_query = get_assets(filters={}, options={"ids": batch_ids}, pagination=None)
+                # Use minimal options to reduce memory usage - only fetch id and name
+                minimal_options = {
+                    "ids": batch_ids,
+                    "includeTemplates": False,
+                    "includeParent": False,
+                    "includeMeta": False,
+                    "includeLocation": False,
+                    "includeData": False,
+                }
+                assets_query = get_assets(filters={}, options=minimal_options, pagination=None)
                 assets_result = await client.query(assets_query)
                 assets = assets_result.get("assets", [])
                 for asset in assets:
@@ -328,7 +346,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         assets_offline = 0
         assets_healthy = 0
         problem_categories = {}
-        example_problems = []
+        # example_problems removed - will be available via separate tool
         assets_with_issues_list = []  # Track which specific assets have issues
         assets_offline_list = []  # Track which specific assets are offline
         assets_healthy_list = []  # Track which specific assets are healthy
@@ -417,25 +435,38 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     if level in ["critical", "error", "warning", "alarm"]:
                         has_issues = True
                         issue_reasons.append(f"{category_name} ({level})")
-                        if len(example_problems) < 5:  # Keep a few examples
-                            example_problems.append({
-                                "asset_id": asset_id,
-                                "asset_name": asset_name,
-                                "category": category_name,
-                                "level": level,
-                                "value": latest_value.get("valueString"),
-                                "timestamp": latest_value.get("timestamp"),
-                            })
+                        # Example problems removed - will be available via separate tool
             
             # Track assets by status
             if has_issues:
                 assets_with_issues += 1
-                assets_with_issues_list.append({
+                # Build structured issue information for easier filtering
+                issue_details = []
+                category_levels = {}  # {category: [levels]}
+                for reason in issue_reasons:
+                    # Parse "category (level)" format
+                    if "(" in reason and ")" in reason:
+                        parts = reason.split("(")
+                        category = parts[0].strip()
+                        level = parts[1].rstrip(")").strip()
+                        if category not in category_levels:
+                            category_levels[category] = []
+                        category_levels[category].append(level)
+                    issue_details.append({
+                        "description": reason,
+                        "category": reason.split("(")[0].strip() if "(" in reason else reason,
+                        "level": reason.split("(")[1].rstrip(")").strip() if "(" in reason else None
+                    })
+                
+                asset_info = {
                     "asset_id": asset_id,
                     "asset_name": asset_name,
-                    "issues": issue_reasons,
+                    "issues": issue_reasons,  # Keep for backward compatibility
+                    "issue_details": issue_details,  # Structured format
+                    "categories": category_levels,  # Quick lookup: {category: [levels]}
                     "last_heard": last_heard,
-                })
+                }
+                assets_with_issues_list.append(asset_info)
             elif has_categories or last_heard:
                 assets_healthy += 1
                 assets_healthy_list.append({
@@ -456,13 +487,29 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             "assets_offline": assets_offline,
             "assets_healthy": assets_healthy,
             "problem_categories": problem_categories if problem_categories else None,
-            "example_problems": example_problems if example_problems else None,
         }
         
         # Only include detailed asset lists if explicitly requested (for concise responses by default)
         if args.include_details:
             if assets_with_issues_list:
                 summary["assets_with_issues_details"] = assets_with_issues_list
+                # Add a helper field for filtering by category/level
+                # This makes it easier for LLM to answer "which assets are critical in timeouts?"
+                assets_by_category_level = {}
+                for asset in assets_with_issues_list:
+                    categories = asset.get("categories", {})
+                    for category, levels in categories.items():
+                        if category not in assets_by_category_level:
+                            assets_by_category_level[category] = {}
+                        for level in levels:
+                            if level not in assets_by_category_level[category]:
+                                assets_by_category_level[category][level] = []
+                            assets_by_category_level[category][level].append({
+                                "asset_id": asset["asset_id"],
+                                "asset_name": asset["asset_name"]
+                            })
+                if assets_by_category_level:
+                    summary["assets_by_category_level"] = assets_by_category_level
             if assets_offline_list:
                 summary["assets_offline_details"] = assets_offline_list
             # Only include healthy assets if there are few enough (avoid overwhelming response)
@@ -492,7 +539,15 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             else:
                 message_parts.append(f"{assets_with_issues} with issues")
         if assets_offline > 0:
-            message_parts.append(f"{assets_offline} offline")
+            # When details are included and user asks about offline assets, list them in message
+            if args.include_details and assets_offline_list:
+                offline_names = [a["asset_name"] for a in assets_offline_list]
+                if len(offline_names) <= 10:  # List up to 10 offline assets in message
+                    message_parts.append(f"{assets_offline} offline: {', '.join(offline_names)}")
+                else:
+                    message_parts.append(f"{assets_offline} offline (see assets_offline_details for full list)")
+            else:
+                message_parts.append(f"{assets_offline} offline")
         
         return format_success_response(
             summary,
@@ -508,6 +563,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetStatusesParams)
 TOOL_METADATA = {
     "name": "exosense-get-asset-statuses",
-    "description": "Check asset health, connectivity, and status conditions across one or many assets. Use this tool DIRECTLY for questions about asset health - it automatically fetches assets internally if needed. You do NOT need to call get-assets first. Returns an aggregated health summary including: total assets checked, count of assets with issues, offline assets, problem categories, and example problems. By default, returns a concise summary without detailed asset lists. Set include_details=true when user asks for specific asset names or 'which assets have issues'. If asset_ids is not provided, automatically fetches and checks all assets (up to max_assets limit, default 100). IMPORTANT: asset_ids must be a list/array of strings, e.g. ['id1', 'id2'] or ['id1']. For a single asset, use ['asset_id'] not 'asset_id'. Ideal for questions like 'give me an overview of asset health', 'are there any error conditions?', or 'summarize problems with my assets'.",
+    "description": "Check asset health, connectivity, and status conditions across one or many assets. Use this tool DIRECTLY for questions about asset health - it automatically fetches assets internally if needed. You do NOT need to call get-assets first. Returns an aggregated health summary including: total assets checked, count of assets with issues, offline assets, and problem categories. By default, returns a concise summary without detailed asset lists. CRITICAL: ALWAYS set include_details=true when user asks for: 'more details', 'which assets', 'list of assets', 'specific assets', 'which assets are [condition]', 'which assets have [issue]', 'which assets are critical/warning/error in [category]', 'provide details about [category]', or ANY question asking for asset names or specific asset information. When include_details=true, the response includes: assets_with_issues_details (list of assets with problems including structured category/level info), assets_by_category_level (helper object for filtering: {category: {level: [assets]}} - use this to answer questions like 'which assets are critical in timeouts?' by looking up assets_by_category_level['timeout']['critical']), assets_offline_details (list of offline assets with names), and assets_healthy_details (list of healthy assets). The message field will also include asset names when include_details=true. If asset_ids is not provided, automatically fetches and checks all assets (up to max_assets limit, default 100). IMPORTANT: asset_ids must be a list/array of strings, e.g. ['id1', 'id2'] or ['id1']. For a single asset, use ['asset_id'] not 'asset_id'. Ideal for questions like 'give me an overview of asset health', 'are there any error conditions?', 'which assets are offline?', 'which assets are critical in timeouts?', 'can you provide more details about [category]?', or 'summarize problems with my assets'.",
     "inputSchema": schema
 }

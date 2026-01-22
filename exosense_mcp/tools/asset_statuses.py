@@ -15,7 +15,9 @@ class AssetStatusesParams(BaseModel):
     asset_ids: Optional[List[str]] = Field(None, description="Optional list of specific asset IDs (UUIDs) to check. If not provided, will automatically fetch and check all assets (up to max_assets limit). You do NOT need to call get-assets first - this tool handles asset fetching internally.")
     max_assets: Optional[int] = Field(100, ge=1, le=500, description="Maximum number of assets to check when asset_ids is not provided (default: 100, max: 500). Only used when asset_ids is not provided.")
     extra_status_data: Optional[bool] = Field(False, description="Get additional status data (up to 5 entries instead of 1) for more detailed historical status information")
-    include_details: Optional[bool] = Field(False, description="CRITICAL: Set to true when user asks for 'more details', 'which assets', 'list of assets', 'specific assets', 'provide details about [category]', 'which assets are [condition]', or ANY question asking for asset names or specific asset information. When true, includes assets_with_issues_details, assets_by_category_level (for filtering by category/level), assets_offline_details, and assets_healthy_details. Default is false for concise overview responses.")
+    include_details: Optional[bool] = Field(False, description="MANDATORY: Set to true when user asks for asset NAMES, lists, or specific assets. Triggers: 'what are the names', 'which assets', 'list of assets', 'show me the assets', 'what assets', 'which assets are [condition]', 'provide more details about [category]', 'names of [condition] assets', 'assets that are [condition]'. Do NOT set to true for 'overview', 'summary', 'health check', 'status', or general questions without asking for names. When true, includes assets_with_issues_details, assets_by_category_level (use this to answer 'what are the names of critical assets in timeouts?' by looking up assets_by_category_level['timeout']['critical']), assets_offline_details, and assets_healthy_details. Default is false for concise overview/summary responses.")
+    filter_category: Optional[str] = Field(None, description="Filter results to only include assets with issues in this category (e.g., 'timeout', 'default'). When provided, only assets with issues in this category will be included in the response. Use this to reduce data when asking about specific categories like 'critical assets in timeouts' - set filter_category='timeout' and filter_level='critical'.")
+    filter_level: Optional[str] = Field(None, description="Filter results to only include assets with issues at this level (e.g., 'critical', 'warning', 'error', 'alarm'). Must be used with filter_category. When both are provided, only assets matching both category and level will be included. Use this to reduce data when asking about specific issues like 'critical assets in timeouts' - set filter_category='timeout' and filter_level='critical'.")
 
 
 async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
@@ -348,8 +350,10 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         problem_categories = {}
         # example_problems removed - will be available via separate tool
         assets_with_issues_list = []  # Track which specific assets have issues
-        assets_offline_list = []  # Track which specific assets are offline
+        assets_offline_list = []  # Track which specific assets are offline (only if they match filter)
         assets_healthy_list = []  # Track which specific assets are healthy
+        # Track all problem categories (before filtering) for summary
+        all_problem_categories = {}
         
         for idx, status in enumerate(all_statuses):
             # Get asset_id - prioritize our mapping since we set it during batch processing
@@ -396,22 +400,34 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             # Check if offline (no last_heard)
             # Only mark as offline if there's no last_heard AND no status data
             # (some assets might not have last_heard but still have status categories)
+            # Note: We'll only include offline assets in the response if they match the filter (or no filter)
+            is_offline = False
             if not last_heard and not has_categories:
-                assets_offline += 1
+                is_offline = True
                 has_issues = True
                 issue_reasons.append("offline (no communication)")
-                assets_offline_list.append({
-                    "asset_id": asset_id,
-                    "asset_name": asset_name,
-                })
             elif not last_heard:
                 # Has status data but no last_heard - might be offline but has historical status
-                assets_offline += 1
+                is_offline = True
                 issue_reasons.append("offline (no recent communication)")
-                assets_offline_list.append({
-                    "asset_id": asset_id,
-                    "asset_name": asset_name,
-                })
+            
+            # Only count offline if no filter is applied, or if offline matches the filter
+            if is_offline:
+                if not args.filter_category and not args.filter_level:
+                    # No filter - count all offline
+                    assets_offline += 1
+                    assets_offline_list.append({
+                        "asset_id": asset_id,
+                        "asset_name": asset_name,
+                    })
+                elif args.filter_category == "offline":
+                    # Filter is for offline - include it
+                    assets_offline += 1
+                    assets_offline_list.append({
+                        "asset_id": asset_id,
+                        "asset_name": asset_name,
+                    })
+                # If filter is for a different category (e.g., timeout), don't count offline separately
             
             # Check categories for problems
             for cat in categories:
@@ -421,15 +437,15 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     latest_value = values[0]
                     level = latest_value.get("level", "").lower()
                     
-                    # Track problem categories
-                    if category_name not in problem_categories:
-                        problem_categories[category_name] = {"count": 0, "levels": {}}
-                    problem_categories[category_name]["count"] += 1
+                    # Track problem categories (track all, but filter later if needed)
+                    if category_name not in all_problem_categories:
+                        all_problem_categories[category_name] = {"count": 0, "levels": {}}
+                    all_problem_categories[category_name]["count"] += 1
                     
                     if level:
-                        if level not in problem_categories[category_name]["levels"]:
-                            problem_categories[category_name]["levels"][level] = 0
-                        problem_categories[category_name]["levels"][level] += 1
+                        if level not in all_problem_categories[category_name]["levels"]:
+                            all_problem_categories[category_name]["levels"][level] = 0
+                        all_problem_categories[category_name]["levels"][level] += 1
                     
                     # Consider critical/error/warning levels as issues
                     if level in ["critical", "error", "warning", "alarm"]:
@@ -439,46 +455,122 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             
             # Track assets by status
             if has_issues:
-                assets_with_issues += 1
-                # Build structured issue information for easier filtering
-                issue_details = []
-                category_levels = {}  # {category: [levels]}
-                for reason in issue_reasons:
-                    # Parse "category (level)" format
-                    if "(" in reason and ")" in reason:
-                        parts = reason.split("(")
-                        category = parts[0].strip()
-                        level = parts[1].rstrip(")").strip()
-                        if category not in category_levels:
-                            category_levels[category] = []
-                        category_levels[category].append(level)
-                    issue_details.append({
-                        "description": reason,
-                        "category": reason.split("(")[0].strip() if "(" in reason else reason,
-                        "level": reason.split("(")[1].rstrip(")").strip() if "(" in reason else None
-                    })
+                # Apply server-side filtering if filter_category and/or filter_level are specified
+                should_include = True
+                if args.filter_category or args.filter_level:
+                    # Check if this asset matches the filter criteria
+                    matches_category = False
+                    matches_level = False
+                    
+                    # Check if asset has issues in the specified category
+                    if args.filter_category:
+                        # Check if any issue matches the category
+                        for reason in issue_reasons:
+                            if "(" in reason and ")" in reason:
+                                category = reason.split("(")[0].strip()
+                                if category == args.filter_category:
+                                    matches_category = True
+                                    # If filter_level is also specified, check level
+                                    if args.filter_level:
+                                        level = reason.split("(")[1].rstrip(")").strip()
+                                        if level == args.filter_level:
+                                            matches_level = True
+                                            break
+                                    else:
+                                        # Category matches, no level filter
+                                        matches_level = True
+                                        break
+                        should_include = matches_category and (not args.filter_level or matches_level)
+                    elif args.filter_level:
+                        # Only level filter (no category) - check if any issue has this level
+                        for reason in issue_reasons:
+                            if "(" in reason and ")" in reason:
+                                level = reason.split("(")[1].rstrip(")").strip()
+                                if level == args.filter_level:
+                                    matches_level = True
+                                    break
+                        should_include = matches_level
                 
-                asset_info = {
-                    "asset_id": asset_id,
-                    "asset_name": asset_name,
-                    "issues": issue_reasons,  # Keep for backward compatibility
-                    "issue_details": issue_details,  # Structured format
-                    "categories": category_levels,  # Quick lookup: {category: [levels]}
-                    "last_heard": last_heard,
-                }
-                assets_with_issues_list.append(asset_info)
+                # Only include if it matches filters (or no filters specified)
+                if should_include:
+                    assets_with_issues += 1
+                    # Build structured issue information for easier filtering
+                    issue_details = []
+                    category_levels = {}  # {category: [levels]}
+                    for reason in issue_reasons:
+                        # Parse "category (level)" format
+                        if "(" in reason and ")" in reason:
+                            parts = reason.split("(")
+                            category = parts[0].strip()
+                            level = parts[1].rstrip(")").strip()
+                            if category not in category_levels:
+                                category_levels[category] = []
+                            category_levels[category].append(level)
+                        issue_details.append({
+                            "description": reason,
+                            "category": reason.split("(")[0].strip() if "(" in reason else reason,
+                            "level": reason.split("(")[1].rstrip(")").strip() if "(" in reason else None
+                        })
+                    
+                    asset_info = {
+                        "asset_id": asset_id,
+                        "asset_name": asset_name,
+                        "issues": issue_reasons,  # Keep for backward compatibility
+                        "issue_details": issue_details,  # Structured format
+                        "categories": category_levels,  # Quick lookup: {category: [levels]}
+                        "last_heard": last_heard,
+                    }
+                    assets_with_issues_list.append(asset_info)
+                else:
+                    # Asset has issues but doesn't match filter - don't count it at all when filtered
+                    # Skip this asset entirely from the filtered view
+                    pass
             elif has_categories or last_heard:
-                assets_healthy += 1
-                assets_healthy_list.append({
-                    "asset_id": asset_id,
-                    "asset_name": asset_name,
-                })
+                # Only count as healthy if no filter is applied
+                # When filtering, healthy assets that don't match the filter should be excluded
+                if not args.filter_category and not args.filter_level:
+                    assets_healthy += 1
+                    assets_healthy_list.append({
+                        "asset_id": asset_id,
+                        "asset_name": asset_name,
+                    })
+                # If filter is applied, don't count healthy assets (they don't match the filter)
             else:
-                assets_healthy += 1  # No data but assume healthy if we have last_heard
-                assets_healthy_list.append({
-                    "asset_id": asset_id,
-                    "asset_name": asset_name,
-                })
+                # No data but assume healthy if we have last_heard
+                # Only count if no filter is applied
+                if not args.filter_category and not args.filter_level:
+                    assets_healthy += 1
+                    assets_healthy_list.append({
+                        "asset_id": asset_id,
+                        "asset_name": asset_name,
+                    })
+        
+        # Apply filters to problem_categories if filters are set
+        if args.filter_category or args.filter_level:
+            # Only include the filtered category in problem_categories
+            if args.filter_category and args.filter_category in all_problem_categories:
+                problem_categories = {args.filter_category: all_problem_categories[args.filter_category].copy()}
+                # If filter_level is set, further filter the levels
+                if args.filter_level and args.filter_level in problem_categories[args.filter_category]["levels"]:
+                    # Only show the filtered level
+                    problem_categories[args.filter_category] = {
+                        "count": problem_categories[args.filter_category]["levels"][args.filter_level],
+                        "levels": {args.filter_level: problem_categories[args.filter_category]["levels"][args.filter_level]}
+                    }
+            else:
+                # Filter category not found in results
+                problem_categories = {}
+        else:
+            # No filter - use all categories
+            problem_categories = all_problem_categories
+        
+        # Adjust counts when filters are applied
+        if args.filter_category or args.filter_level:
+            # When filtered, counts should reflect only filtered assets
+            # Only count assets that match the filter (assets_with_issues)
+            total_checked = assets_with_issues
+            assets_healthy = 0  # Don't count healthy assets when filtering - they don't match
+            # assets_offline is already adjusted (only counted if matches filter)
         
         # Build summary response
         summary = {
@@ -495,23 +587,40 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                 summary["assets_with_issues_details"] = assets_with_issues_list
                 # Add a helper field for filtering by category/level
                 # This makes it easier for LLM to answer "which assets are critical in timeouts?"
-                assets_by_category_level = {}
-                for asset in assets_with_issues_list:
-                    categories = asset.get("categories", {})
-                    for category, levels in categories.items():
-                        if category not in assets_by_category_level:
-                            assets_by_category_level[category] = {}
-                        for level in levels:
-                            if level not in assets_by_category_level[category]:
-                                assets_by_category_level[category][level] = []
-                            assets_by_category_level[category][level].append({
-                                "asset_id": asset["asset_id"],
-                                "asset_name": asset["asset_name"]
-                            })
-                if assets_by_category_level:
-                    summary["assets_by_category_level"] = assets_by_category_level
-            if assets_offline_list:
+                # Only build this if not already filtered (to avoid redundant data)
+                if not args.filter_category and not args.filter_level:
+                    assets_by_category_level = {}
+                    for asset in assets_with_issues_list:
+                        categories = asset.get("categories", {})
+                        for category, levels in categories.items():
+                            if category not in assets_by_category_level:
+                                assets_by_category_level[category] = {}
+                            for level in levels:
+                                if level not in assets_by_category_level[category]:
+                                    assets_by_category_level[category][level] = []
+                                assets_by_category_level[category][level].append({
+                                    "asset_id": asset["asset_id"],
+                                    "asset_name": asset["asset_name"]
+                                })
+                    if assets_by_category_level:
+                        summary["assets_by_category_level"] = assets_by_category_level
+                else:
+                    # When filtered, just return the filtered list (already matches the filter)
+                    # Add a note that filtering was applied
+                    summary["filter_applied"] = {
+                        "category": args.filter_category,
+                        "level": args.filter_level
+                    }
+                    # Don't include assets_by_category_level when filtered (redundant)
+            # Include offline assets details only if no filter or filter is for offline
+            if assets_offline_list and (not args.filter_category or args.filter_category == "offline"):
                 summary["assets_offline_details"] = assets_offline_list
+            
+            # Include healthy assets details (only if no filter, since filtered view doesn't show healthy)
+            if assets_healthy_list and not args.filter_category and not args.filter_level:
+                # Limit healthy assets to avoid huge responses
+                if len(assets_healthy_list) <= 10:
+                    summary["assets_healthy_details"] = assets_healthy_list
             # Only include healthy assets if there are few enough (avoid overwhelming response)
             if len(assets_healthy_list) <= 10:
                 summary["assets_healthy_details"] = assets_healthy_list
@@ -563,6 +672,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetStatusesParams)
 TOOL_METADATA = {
     "name": "exosense-get-asset-statuses",
-    "description": "Check asset health, connectivity, and status conditions across one or many assets. Use this tool DIRECTLY for questions about asset health - it automatically fetches assets internally if needed. You do NOT need to call get-assets first. Returns an aggregated health summary including: total assets checked, count of assets with issues, offline assets, and problem categories. By default, returns a concise summary without detailed asset lists. CRITICAL: ALWAYS set include_details=true when user asks for: 'more details', 'which assets', 'list of assets', 'specific assets', 'which assets are [condition]', 'which assets have [issue]', 'which assets are critical/warning/error in [category]', 'provide details about [category]', or ANY question asking for asset names or specific asset information. When include_details=true, the response includes: assets_with_issues_details (list of assets with problems including structured category/level info), assets_by_category_level (helper object for filtering: {category: {level: [assets]}} - use this to answer questions like 'which assets are critical in timeouts?' by looking up assets_by_category_level['timeout']['critical']), assets_offline_details (list of offline assets with names), and assets_healthy_details (list of healthy assets). The message field will also include asset names when include_details=true. If asset_ids is not provided, automatically fetches and checks all assets (up to max_assets limit, default 100). IMPORTANT: asset_ids must be a list/array of strings, e.g. ['id1', 'id2'] or ['id1']. For a single asset, use ['asset_id'] not 'asset_id'. Ideal for questions like 'give me an overview of asset health', 'are there any error conditions?', 'which assets are offline?', 'which assets are critical in timeouts?', 'can you provide more details about [category]?', or 'summarize problems with my assets'.",
+    "description": "Check asset health, connectivity, and status conditions across one or many assets. Use this tool DIRECTLY for questions about asset health - it automatically fetches assets internally if needed. You do NOT need to call get-assets first. Returns an aggregated health summary including: total assets checked, count of assets with issues, offline assets, and problem categories. CRITICAL RULE: If the user asks for ASSET NAMES, 'what are the names', 'which assets', 'list of assets', 'what assets', or ANY question asking for specific asset identification, you MUST set include_details=true. Do NOT set include_details=true for 'overview', 'summary', 'health check', 'status', or general questions that don't ask for asset names. FILTERING (IMPORTANT FOR EFFICIENCY): When user asks about specific categories/levels (e.g., 'critical assets in timeouts', 'names of assets with critical timeout issues', 'what are the names of assets with critical timeout issues'), you MUST set filter_category and filter_level to reduce data returned on the server side. Examples: 'critical assets in timeouts' -> filter_category='timeout', filter_level='critical', include_details=true. 'names of assets with critical timeout issues' -> filter_category='timeout', filter_level='critical', include_details=true. 'assets with timeout issues' -> filter_category='timeout', include_details=true. When filters are applied, only matching assets are returned, significantly reducing response size. When include_details=true, the response includes: assets_with_issues_details (list of assets with problems including structured category/level info), assets_by_category_level (helper object for filtering: {category: {level: [assets]}} - only included when no filters applied), assets_offline_details (list of offline assets with names), and assets_healthy_details (list of healthy assets). The message field will also include asset names when include_details=true. If asset_ids is not provided, automatically fetches and checks all assets (up to max_assets limit, default 100). IMPORTANT: asset_ids must be a list/array of strings, e.g. ['id1', 'id2'] or ['id1']. For a single asset, use ['asset_id'] not 'asset_id'. Examples: 'overview of health' -> include_details=false, 'what are the names of critical assets in timeouts?' -> filter_category='timeout', filter_level='critical', include_details=true, 'which assets are offline?' -> include_details=true.",
     "inputSchema": schema
 }

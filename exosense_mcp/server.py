@@ -464,7 +464,7 @@ async def handle_initialize(request: Request) -> Response:
                 elif hasattr(auth, 'accessToken') and auth.accessToken and not auth.origin:
                     logger.warning(f"   ⚠️  OAuth token provided but origin missing - will use .env origin as fallback")
                 else:
-                    logger.info("   ✅ Auth extracted from headers (client-provided)")
+                    logger.debug("   ✅ Auth extracted from headers (client-provided)")
             else:
                 logger.debug("   No auth found in headers")
         except Exception as e:

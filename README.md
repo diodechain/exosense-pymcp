@@ -99,6 +99,14 @@ The server will:
 3. Start the HTTP server on the configured port (default: 8080)
 4. Listen for MCP requests at `http://localhost:8080/mcp`
 
+### Pipeline Authentication
+
+For pipelines that want to use their own ExoSense credentials (instead of the server's `.env` default), see **[PIPELINE_AUTHENTICATION.md](PIPELINE_AUTHENTICATION.md)** for detailed integration examples including:
+- cURL examples
+- Python/Node.js code samples
+- GitHub Actions and GitLab CI configurations
+- Security best practices
+
 ### MCP Client Configuration
 
 To connect an MCP client to the ExoSense MCP server, configure your client with:

@@ -10,17 +10,20 @@ async def authenticate(request_headers: Dict[str, Any]) -> Dict[str, ExoSenseAut
     
     Currently the work of the auth is passed over to GraphQL.
     """
-    origin = (
-        request_headers.get("x-origin")
-        or request_headers.get("origin")
-        or ""
-    )
+    # Extract origin from headers - prefer x-origin, then origin header
+    # If neither is provided, we'll leave it empty and let the caller decide
+    # (server may have .env fallback, but we shouldn't mix here)
+    origin = request_headers.get("x-origin") or request_headers.get("origin") or ""
 
     # Many of the MCP Clients don't let me change the type of the auth token.
     # But they allow using a different header name.
     # So we'll check an alt header for an automation token
     if "x-automation-token" in request_headers:
         token = request_headers["x-automation-token"]
+        # If origin is missing, raise an error - don't silently use .env fallback
+        # This ensures pipeline credentials are complete and not mixed with .env
+        if not origin:
+            raise ValueError("x-automation-token provided but x-origin or origin header is required")
         return {
             "authorization": TokenAuth(
                 type="token",
@@ -42,6 +45,9 @@ async def authenticate(request_headers: Dict[str, Any]) -> Dict[str, ExoSenseAut
 
     if auth_type == "Bearer":
         # Make an OAuthAuth object
+        # If origin is missing, raise an error - don't silently use .env fallback
+        if not origin:
+            raise ValueError("Authorization: Bearer token provided but x-origin or origin header is required")
         return {
             "authorization": OAuthAuth(
                 type="oauth",
@@ -52,6 +58,9 @@ async def authenticate(request_headers: Dict[str, Any]) -> Dict[str, ExoSenseAut
 
     if auth_type == "Automation":
         # Make a TokenAuth object
+        # If origin is missing, raise an error - don't silently use .env fallback
+        if not origin:
+            raise ValueError("Authorization: Automation token provided but x-origin or origin header is required")
         return {
             "authorization": TokenAuth(
                 type="token",

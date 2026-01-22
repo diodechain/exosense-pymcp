@@ -67,18 +67,31 @@ def get_exosense_client(auth: Optional[ExoSenseAuth] = None) -> ExoSenseClient:
     global _exosense_client
 
     if not _exosense_client or auth:
-        auth_to_use = auth or TokenAuth(
-            type="token",
-            token=EXOSENSE_AUTH_TOKEN or "",
-            origin=EXOSENSE_ORIGIN,
-        )
-
-        if not auth_to_use.origin:
-            auth_to_use.origin = EXOSENSE_ORIGIN
+        # If auth is provided (from headers), use it as-is - don't mix with .env
+        # The authenticate() function now requires origin header when credentials are provided
+        # So we should never have auth without origin here, but keep the check for safety
+        if auth:
+            auth_to_use = auth
+            # This should never happen now (authenticate() requires origin), but keep as safety check
+            if not auth_to_use.origin:
+                raise ValueError("Authentication provided but origin is missing. Please include x-origin or origin header.")
+            # Derive API URL from the origin provided in headers
+            # API URL is origin + "/api/graphql"
+            graphql_endpoint = f"{auth_to_use.origin.rstrip('/')}/api/graphql"
+            logger.debug(f"   Using API endpoint from origin: {graphql_endpoint}")
+        else:
+            # No auth provided, use .env defaults
+            auth_to_use = TokenAuth(
+                type="token",
+                token=EXOSENSE_AUTH_TOKEN or "",
+                origin=EXOSENSE_ORIGIN,
+            )
+            # Use .env API URL
+            graphql_endpoint = EXOSENSE_API_URL
 
         _exosense_client = ExoSenseClient(
             ExoSenseConfig(
-                graphql_endpoint=EXOSENSE_API_URL,
+                graphql_endpoint=graphql_endpoint,
                 auth=auth_to_use,
             )
         )
@@ -445,7 +458,13 @@ async def handle_initialize(request: Request) -> Response:
             auth_result = await authenticate(request_headers)
             if auth_result and "authorization" in auth_result:
                 auth = auth_result["authorization"]
-                logger.info("   ✅ Auth extracted from headers (client-provided)")
+                # Log if origin is missing - will use .env fallback
+                if hasattr(auth, 'token') and auth.token and not auth.origin:
+                    logger.warning(f"   ⚠️  Token provided but origin missing - will use .env origin as fallback")
+                elif hasattr(auth, 'accessToken') and auth.accessToken and not auth.origin:
+                    logger.warning(f"   ⚠️  OAuth token provided but origin missing - will use .env origin as fallback")
+                else:
+                    logger.info("   ✅ Auth extracted from headers (client-provided)")
             else:
                 logger.debug("   No auth found in headers")
         except Exception as e:
@@ -472,10 +491,40 @@ async def handle_initialize(request: Request) -> Response:
         client_name = params.get('clientInfo', {}).get('name', 'unknown')
         logger.debug(f"✅ New session created: {session_id} (client: {client_name})")
         
+        # Build authentication metadata for discovery
+        auth_metadata = {
+            "required": False,  # Auth is optional (has .env fallback)
+            "methods": [
+                {
+                    "type": "automation_token",
+                    "header": "x-automation-token",
+                    "description": "ExoSense automation token",
+                    "required_headers": ["x-automation-token", "x-origin"]
+                },
+                {
+                    "type": "bearer_token",
+                    "header": "Authorization",
+                    "scheme": "Automation",
+                    "description": "Automation token via Authorization header",
+                    "required_headers": ["Authorization", "origin"]
+                },
+                {
+                    "type": "oauth",
+                    "header": "Authorization",
+                    "scheme": "Bearer",
+                    "description": "OAuth bearer token",
+                    "required_headers": ["Authorization", "origin"]
+                }
+            ],
+            "fallback_available": bool(EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN),
+            "fallback_description": "Server has default credentials configured in .env (optional)"
+        }
+        
         result = {
             "protocolVersion": "2024-11-05",
             "capabilities": {
-                "tools": {}
+                "tools": {},
+                "authentication": auth_metadata
             },
             "serverInfo": {
                 "name": "exosense-mcp-server",
@@ -840,8 +889,68 @@ def create_app() -> web.Application:
             content_type="application/json"
         )
     
+    # Add authentication discovery endpoint (industry standard .well-known pattern)
+    async def auth_discovery(request: Request) -> Response:
+        """
+        Authentication discovery endpoint (industry standard .well-known pattern).
+        Allows clients to discover what authentication methods are supported.
+        """
+        auth_metadata = {
+            "authentication": {
+                "required": False,  # Auth is optional (has .env fallback)
+                "methods": [
+                    {
+                        "type": "automation_token",
+                        "header": "x-automation-token",
+                        "description": "ExoSense automation token",
+                        "required_headers": ["x-automation-token", "x-origin"],
+                        "example": {
+                            "x-automation-token": "your-automation-token",
+                            "x-origin": "https://your-instance.exosense.com"
+                        }
+                    },
+                    {
+                        "type": "bearer_token",
+                        "header": "Authorization",
+                        "scheme": "Automation",
+                        "description": "Automation token via Authorization header",
+                        "required_headers": ["Authorization", "origin"],
+                        "example": {
+                            "Authorization": "Automation your-automation-token",
+                            "origin": "https://your-instance.exosense.com"
+                        }
+                    },
+                    {
+                        "type": "oauth",
+                        "header": "Authorization",
+                        "scheme": "Bearer",
+                        "description": "OAuth bearer token",
+                        "required_headers": ["Authorization", "origin"],
+                        "example": {
+                            "Authorization": "Bearer your-oauth-token",
+                            "origin": "https://your-instance.exosense.com"
+                        }
+                    }
+                ],
+                "fallback_available": bool(EXOSENSE_AUTH_TOKEN and EXOSENSE_ORIGIN),
+                "fallback_description": "Server has default credentials configured in .env (optional - clients can still override with headers)"
+            },
+            "server": {
+                "name": "exosense-mcp-server",
+                "version": "1.0.0",
+                "protocol": "MCP",
+                "protocolVersion": "2024-11-05"
+            }
+        }
+        
+        return web.Response(
+            text=json.dumps(auth_metadata, indent=2),
+            content_type="application/json"
+        )
+    
     app.router.add_get("/health", health_check)
     app.router.add_get("/", health_check)  # Also respond to root
+    app.router.add_get("/.well-known/mcp-authentication", auth_discovery)
     
     return app
 
@@ -915,6 +1024,8 @@ def main():
     logger.info("=" * 80)
     logger.info(f"📍 Server URL: http://127.0.0.1:{PORT}/mcp")
     logger.info(f"📍 Health check: http://127.0.0.1:{PORT}/health")
+    logger.info(f"📍 Auth discovery: http://127.0.0.1:{PORT}/.well-known/mcp-authentication")
+    logger.info(f"📍 Auth discovery: http://127.0.0.1:{PORT}/.well-known/mcp-authentication")
     logger.info(f"🔧 Tools loaded: {len(TOOLS)}")
     if TOOLS:
         logger.info(f"   Tool names: {', '.join(TOOLS.keys())}")

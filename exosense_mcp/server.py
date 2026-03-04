@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 EXOSENSE_API_URL = os.getenv("EXOSENSE_API_URL", "https://api.exosense.com")
 EXOSENSE_AUTH_TOKEN = os.getenv("EXOSENSE_AUTH_TOKEN")
 EXOSENSE_ORIGIN = os.getenv("EXOSENSE_ORIGIN", "https://exosense.com")
-PORT = int(os.getenv("PORT", "8080"))
+PORT = int(os.getenv("PORT", "9000"))
 HTTP_STREAMING = os.getenv("HTTP_STREAMING")
 
 # Session storage (in production, use a proper session store)

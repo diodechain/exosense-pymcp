@@ -61,7 +61,7 @@ The server can be configured using environment variables. You can set them in on
 - `EXOSENSE_API_URL`: GraphQL endpoint for ExoSense (default: `https://api.exosense.com`)
 - `EXOSENSE_ORIGIN`: Host name of the solution being referenced (default: `https://exosense.com`)
 - `EXOSENSE_AUTH_TOKEN`: Default authentication token (optional, required for private mode)
-- `PORT`: Server port (default: `8080`; e.g. `9000` for this deployment)
+- `PORT`: Server port (default: `9000`)
 - `HTTP_STREAMING`: Set to `"Private"` for backward compatibility (optional, no longer required for auth mode)
 
 ### Hybrid Authentication Mode
@@ -102,8 +102,8 @@ exosense-mcp-server
 The server will:
 1. Test the connection to ExoSense (if credentials are provided)
 2. Load all tools from `config.yml`
-3. Start the HTTP server on the configured port (default: 8080, or set `PORT=9000` in `.env`)
-4. Listen for MCP requests at `http://localhost:PORT/mcp` (e.g. `http://localhost:9000/mcp`)
+3. Start the HTTP server on the configured port (default: 9000; set `PORT` in `.env` to override)
+4. Listen for MCP requests at `http://localhost:9000/mcp` (or whatever port you set)
 
 ### Running as a systemd service
 
@@ -124,16 +124,16 @@ To run the server under systemd with the project’s virtual environment (good f
 3. **Install the unit file and start the service:**
 
    ```bash
-   sudo cp contrib/exosense-mcp-server.service /etc/systemd/system/
+   sudo cp contrib/exosense-pymcp.service /etc/systemd/system/
    sudo systemctl daemon-reload
-   sudo systemctl enable --now exosense-mcp-server
+   sudo systemctl enable --now exosense-pymcp
    ```
 
 4. **Check status and logs:**
 
    ```bash
-   sudo systemctl status exosense-mcp-server
-   journalctl -u exosense-mcp-server -f
+   sudo systemctl status exosense-pymcp
+   journalctl -u exosense-pymcp -f
    ```
 
 Each project on the VM can have its own unit file; copy and edit the template to point at its path under `/root/projects/`.

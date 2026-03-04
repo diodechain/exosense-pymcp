@@ -1,7 +1,7 @@
 # ExoSense MCP server – systemd unit (one per project on the VM)
 # Copy to /etc/systemd/system/, edit WorkingDirectory/ExecStart and User/Group below, then:
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now exosense-mcp-server
+#   sudo systemctl enable --now exosense-pymcp
 #
 # One-time setup:
 #   cd /root/projects/exosense-pymcp

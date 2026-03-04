@@ -85,6 +85,16 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     else:
                         arguments['include_details'] = False
             
+            # Treat "all" / empty as no filter so LLMs don't accidentally get zero results
+            if arguments.get("filter_category") is not None:
+                fc = arguments["filter_category"]
+                if fc == "" or (isinstance(fc, str) and fc.strip().lower() == "all"):
+                    arguments["filter_category"] = None
+            if arguments.get("filter_level") is not None:
+                fl = arguments["filter_level"]
+                if fl == "" or (isinstance(fl, str) and fl.strip().lower() == "all"):
+                    arguments["filter_level"] = None
+            
             args = AssetStatusesParams(**arguments)
             # Ensure defaults are set if None values are provided
             if args.extra_status_data is None:

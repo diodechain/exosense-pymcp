@@ -286,7 +286,7 @@ def load_tools_from_config(config_path: str = "config.yml", reload: bool = False
             logger.info(f"{'🔄 Reloaded' if reload else 'Loaded'} tool: {tool_name} from {tool_file}")
             
         except Exception as e:
-            logger.error(f"Error loading tool {tool_name} from {tool_file}: {e}")
+            logger.exception(f"Error loading tool {tool_name} from {tool_file}: {e}")
             continue
     
     if reload:

@@ -21,8 +21,11 @@ The server is implemented using `aiohttp` and follows the JSON-RPC 2.0 protocol 
 
 ## Installation
 
+Use a virtual environment (recommended, and required on systems with externally-managed Python such as Debian/Ubuntu):
+
 ```bash
-cd python
+python3 -m venv .venv
+source .venv/bin/activate   # On Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
@@ -31,6 +34,8 @@ Or install as a package:
 ```bash
 pip install -e .
 ```
+
+If you see an "externally-managed-environment" error from pip, create and use a venv as above; do not use `--break-system-packages`.
 
 ## Configuration
 
@@ -43,7 +48,7 @@ The server can be configured using environment variables. You can set them in on
      EXOSENSE_API_URL=https://api.exosense.com
      EXOSENSE_ORIGIN=https://exosense.com
      EXOSENSE_AUTH_TOKEN=your-token-here
-     PORT=8080
+     PORT=9000
      HTTP_STREAMING=Private
      ```
    - The `.env` file is automatically loaded when the server starts
@@ -56,7 +61,7 @@ The server can be configured using environment variables. You can set them in on
 - `EXOSENSE_API_URL`: GraphQL endpoint for ExoSense (default: `https://api.exosense.com`)
 - `EXOSENSE_ORIGIN`: Host name of the solution being referenced (default: `https://exosense.com`)
 - `EXOSENSE_AUTH_TOKEN`: Default authentication token (optional, required for private mode)
-- `PORT`: Server port (default: `8080`)
+- `PORT`: Server port (default: `8080`; e.g. `9000` for this deployment)
 - `HTTP_STREAMING`: Set to `"Private"` for backward compatibility (optional, no longer required for auth mode)
 
 ### Hybrid Authentication Mode
@@ -85,6 +90,7 @@ This allows IT to configure a default API key in `.env` for convenience, while s
 
 ```bash
 python3 -m exosense_mcp.server
+.venv/bin/python -m exosense_mcp.server
 ```
 
 Or using the installed script:
@@ -96,8 +102,41 @@ exosense-mcp-server
 The server will:
 1. Test the connection to ExoSense (if credentials are provided)
 2. Load all tools from `config.yml`
-3. Start the HTTP server on the configured port (default: 8080)
-4. Listen for MCP requests at `http://localhost:8080/mcp`
+3. Start the HTTP server on the configured port (default: 8080, or set `PORT=9000` in `.env`)
+4. Listen for MCP requests at `http://localhost:PORT/mcp` (e.g. `http://localhost:9000/mcp`)
+
+### Running as a systemd service
+
+To run the server under systemd with the project’s virtual environment (good for VMs with many projects). The unit file is set up for projects under `/root/projects/` (e.g. `/root/projects/exosense-pymcp`).
+
+1. **Install the project and create a venv** in `/root/projects/exosense-pymcp`:
+
+   ```bash
+   mkdir -p /root/projects/exosense-pymcp
+   cp -r . /root/projects/exosense-pymcp/   # or clone/git pull
+   cd /root/projects/exosense-pymcp
+   python3 -m venv .venv
+   .venv/bin/pip install -r requirements.txt
+   ```
+
+2. **Configure** a `.env` file in that directory (see Configuration above).
+
+3. **Install the unit file and start the service:**
+
+   ```bash
+   sudo cp contrib/exosense-mcp-server.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now exosense-mcp-server
+   ```
+
+4. **Check status and logs:**
+
+   ```bash
+   sudo systemctl status exosense-mcp-server
+   journalctl -u exosense-mcp-server -f
+   ```
+
+Each project on the VM can have its own unit file; copy and edit the template to point at its path under `/root/projects/`.
 
 ### Pipeline Authentication
 
@@ -116,7 +155,7 @@ To connect an MCP client to the ExoSense MCP server, configure your client with:
   "mcpServers": {
     "exosense": {
       "type": "http",
-      "url": "http://localhost:8080/mcp",
+      "url": "http://localhost:9000/mcp",
       "headers": {
         "x-automation-token": "<YOUR_EXOSENSE_API_TOKEN>",
         "origin": "https://your-exosense-instance.com"

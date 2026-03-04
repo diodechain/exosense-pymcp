@@ -1,0 +1,35 @@
+# ExoSense MCP server – systemd unit (one per project on the VM)
+# Copy to /etc/systemd/system/, edit WorkingDirectory/ExecStart and User/Group below, then:
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now exosense-mcp-server
+#
+# One-time setup:
+#   cd /root/projects/exosense-pymcp
+#   python3 -m venv .venv
+#   .venv/bin/pip install -r requirements.txt
+#   # Add .env with EXOSENSE_* and PORT (see README).
+
+[Unit]
+Description=ExoSense MCP Server (HTTP/JSON-RPC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Project root: venv and .env live here
+WorkingDirectory=/root/projects/exosense-pymcp
+ExecStart=/root/projects/exosense-pymcp/.venv/bin/python -m exosense_mcp.server
+# Run as root (matches /root/projects). For a dedicated user, set User/Group and chown the project dir.
+# User=exosense-mcp
+# Group=exosense-mcp
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+# Log to journald
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=exosense-mcp
+Environment=PORT=9000
+
+[Install]
+WantedBy=multi-user.target

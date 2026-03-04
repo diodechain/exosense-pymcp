@@ -309,10 +309,10 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         
         for i in range(0, len(asset_ids_to_check), batch_size):
             batch_ids = asset_ids_to_check[i:i + batch_size]
-            options: dict = {"extraStatusData": args.extra_status_data}
+        options: dict = {"extraStatusData": args.extra_status_data}
             query = get_asset_statuses(batch_ids, options)
             context.log.debug(f"Checking status for batch {i//batch_size + 1} ({len(batch_ids)} assets)")
-            result = await client.query(query)
+        result = await client.query(query)
             batch_statuses = result.get("assetStatuses", [])
             
             # Match status responses to asset IDs (in case status doesn't have id field)

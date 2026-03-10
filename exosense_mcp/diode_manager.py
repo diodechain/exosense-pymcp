@@ -363,10 +363,13 @@ def start_diode_cli() -> bool:
                     for line in iter(diode_process.stdout.readline, ""):
                         if not line:
                             break
+                        stripped = line.rstrip()
                         with _output_lock:
-                            diode_output.append(line.rstrip())
+                            diode_output.append(stripped)
                             if len(diode_output) > 500:
                                 diode_output.pop(0)
+                        if stripped:
+                            print(f"  diode | {stripped}", flush=True)
                 except Exception:
                     pass
 

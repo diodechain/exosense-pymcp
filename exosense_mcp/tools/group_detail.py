@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..graphql.groups import get_all_groups
 from ..types.graphql import Pagination
 from .types import ToolContext
-from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
+from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, asset_to_structured
 
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
@@ -52,26 +52,31 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
     if not groups:
         return format_success_response({"group": None, "message": "Group not found."}, "Group not found.")
     group = groups[0]
-    # Keep response small: only include requested nested data
+    gid = group.get("id")
+    gname = group.get("name") or ""
+    parent_id = group.get("parent_id")
+    parent_group = None
+    if parent_id:
+        parent_group = {"group_id": parent_id, "group_name": None}
     out = {
-        "id": group.get("id"),
-        "name": group.get("name"),
-        "parent_id": group.get("parent_id"),
+        "group_id": gid,
+        "group_name": gname,
+        "parent_group": parent_group,
         "description": group.get("description"),
         "custom_id": group.get("custom_id"),
     }
     if args.include_assets and group.get("assets"):
-        out["assets"] = [{"id": a.get("id"), "name": a.get("name")} for a in group["assets"]]
+        out["assets"] = [asset_to_structured(a, group_id=gid, group_name=gname) for a in group["assets"]]
     if args.include_devices and group.get("devices"):
         out["devices"] = [{"id": d.get("id"), "identity": d.get("identity")} for d in group["devices"]]
     if args.include_users and group.get("users"):
         out["users"] = [{"id": u.get("id"), "email": u.get("email"), "name": u.get("name")} for u in group["users"]]
 
-    return format_success_response({"group": out}, f"Group: {group.get('name', '')}.")
+    return format_success_response({"group": out}, f"Group: {gname}.")
 
 schema = pydantic_to_json_schema(GroupDetailParams)
 TOOL_METADATA = {
     "name": "exosense-get-group",
-    "description": "Use for: 'Details of group X', 'What is in this group?', 'Who has access?', 'What assets in group X?'. Pass group_id and set include_assets/include_devices/include_users when needed. For 'how many assets does [group] have?' use exosense-group-asset-count instead (one call, small response). For listing groups use exosense-list-groups.",
+    "description": "Use for: 'Details of group X', 'What is in this group?', 'Who has access?', 'What assets in group X?'. Pass group_id and set include_assets/include_devices/include_users when needed. Returns group_id, group_name, parent_group (group_id, group_name), and assets (asset_id, asset_name). For 'who is the top level?' or 'who owns this group?' use exosense-get-group-path with this group_id. For 'how many assets?' use exosense-group-asset-count. For listing groups use exosense-list-groups.",
     "inputSchema": schema,
 }

@@ -136,17 +136,22 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         assets_with_scores.sort(key=lambda x: x["similarity"], reverse=True)
         assets_with_scores = assets_with_scores[: args.limit]
 
+        matches = []
+        for item in assets_with_scores:
+            a = item["asset"]
+            matches.append({
+                "asset_id": a.get("id"),
+                "asset_name": a.get("name") or "",
+                "description": a.get("description") or "",
+                "locked": a.get("locked"),
+                "similarity_score": round(item["similarity"], 3),
+            })
+
         return format_success_response(
             {
                 "query": args.query,
-                "matches": [
-                    {
-                        **item["asset"],
-                        "similarity_score": round(item["similarity"], 3),
-                    }
-                    for item in assets_with_scores
-                ],
-                "count": len(assets_with_scores),
+                "matches": matches,
+                "count": len(matches),
                 "min_similarity": args.min_similarity,
             },
             f'Found {len(assets_with_scores)} asset(s) matching "{args.query}"',
@@ -161,6 +166,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(FindAssetParams)
 TOOL_METADATA = {
     "name": "exosense-find-asset",
-    "description": "Find assets by fuzzy name matching. Useful when you have a partial or approximate asset name (e.g., 'my battery' to find 'Battery Bank'). Returns high-level asset information (id, name, description) sorted by similarity score. Use this tool first when you need to find assets before checking their health, status, or details. After finding assets, pass ALL found asset IDs as a list to 'exosense-get-asset-statuses' in a single call, e.g. {'asset_ids': ['id1', 'id2']} - do NOT call get-asset-statuses separately for each asset.",
+    "description": "Find assets by fuzzy name matching. Useful when you have a partial or approximate asset name (e.g., 'my battery' to find 'Battery Bank'). Returns asset_id, asset_name, description, similarity_score. Use this tool first when you need to find assets before checking their health, status, or details. After finding assets, pass ALL found asset_ids to 'exosense-get-asset-statuses' in a single call, e.g. {'asset_ids': ['id1', 'id2']} - do NOT call get-asset-statuses separately for each asset.",
     "inputSchema": schema
 }

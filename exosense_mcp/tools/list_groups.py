@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..graphql.groups import get_groups_list
 from ..types.graphql import Pagination
 from .types import ToolContext
-from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
+from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured
 
 
 class ListGroupsParams(BaseModel):
@@ -47,11 +47,13 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
     query = get_groups_list(filters, pagination)
     result = await client.query(query)
     groups = result.get("groups", [])
+    id_to_name = {g.get("id"): g.get("name") or "" for g in groups if g.get("id")}
+    structured = [group_to_structured(g, id_to_name=id_to_name) for g in groups]
 
     return format_success_response(
         {
-            "count": len(groups),
-            "groups": [{"id": g.get("id"), "name": g.get("name"), "parent_id": g.get("parent_id")} for g in groups],
+            "count": len(structured),
+            "groups": structured,
             "has_more": len(groups) == args.limit,
         },
         f"Found {len(groups)} group(s).",
@@ -61,6 +63,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(ListGroupsParams)
 TOOL_METADATA = {
     "name": "exosense-list-groups",
-    "description": "Use for: 'How many groups?', 'List groups', 'What groups exist?', 'Search groups by name'. Returns a light list (id, name, parent_id) only. For hierarchy use exosense-get-group-tree; for one group's details use exosense-get-group.",
+    "description": "Use for: 'How many groups?', 'List groups', 'What groups exist?', 'Search groups by name'. Returns group_id, group_name, parent_group (group_id, group_name). For 'who is the top level?' or 'who owns this group?' use exosense-get-group-path with the group_id. For tree structure use exosense-get-group-tree; for one group's details use exosense-get-group.",
     "inputSchema": schema,
 }

@@ -22,6 +22,8 @@ tools:
     name: exosense-list-groups
   - file: exosense_mcp/tools/group_tree.py
     name: exosense-get-group-tree
+  - file: exosense_mcp/tools/group_path.py
+    name: exosense-get-group-path
   - file: exosense_mcp/tools/group_detail.py
     name: exosense-get-group
   - file: exosense_mcp/tools/group_asset_count.py

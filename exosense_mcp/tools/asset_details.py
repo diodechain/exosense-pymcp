@@ -111,18 +111,17 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         # Get the overall latest data point
         overall_latest = latest_data_points[0] if latest_data_points else None
 
-        # Return a compact summary instead of the full asset object to keep
-        # responses small and easier for LLMs to work with.
+        # Return a compact summary with structured ids for LLMs (asset_id, asset_name, parent_group).
+        parent = asset.get("parent")
+        parent_group = None
+        if parent:
+            parent_group = {"group_id": parent.get("id"), "group_name": parent.get("name")}
         summary = {
-            "id": asset.get("id"),
-            "name": asset.get("name") or "Unnamed Asset",
+            "asset_id": asset.get("id"),
+            "asset_name": asset.get("name") or "Unnamed Asset",
             "description": asset.get("description") or "",
             "locked": asset.get("locked"),
-            "parent": asset.get("parent")
-            and {
-                "id": asset["parent"].get("id"),
-                "name": asset["parent"].get("name"),
-            },
+            "parent_group": parent_group,
             "template": asset.get("template")
             and {
                 "id": asset["template"].get("id"),

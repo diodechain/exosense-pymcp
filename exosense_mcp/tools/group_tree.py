@@ -6,7 +6,7 @@ import re
 from ..graphql.groups import get_groups_tree
 from ..types.graphql import Pagination
 from .types import ToolContext
-from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
+from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, group_children_to_structured, path_from_root_for_group
 
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
@@ -43,9 +43,33 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
     query = get_groups_tree(filters, pagination)
     result = await client.query(query)
     groups = result.get("groups", [])
+    id_to_name = {g.get("id"): g.get("name") or "" for g in groups if g.get("id")}
+    id_to_info = {g.get("id"): {"name": g.get("name"), "parent_id": g.get("parent_id")} for g in groups if g.get("id")}
+    for g in groups:
+        for c in g.get("children") or []:
+            if c.get("id"):
+                id_to_name[c["id"]] = c.get("name") or ""
+                id_to_info[c["id"]] = {"name": c.get("name"), "parent_id": g.get("id")}
+    structured = []
+    for g in groups:
+        node = group_to_structured(g, id_to_name=id_to_name)
+        gid = g.get("id")
+        if gid:
+            node["path_from_root"] = path_from_root_for_group(gid, id_to_info)
+        children = g.get("children") or []
+        node["children"] = group_children_to_structured(
+            children,
+            parent_id=g.get("id"),
+            parent_name=g.get("name") or "",
+        )
+        for ch in node["children"]:
+            cid = ch.get("group_id")
+            if cid:
+                ch["path_from_root"] = path_from_root_for_group(cid, id_to_info)
+        structured.append(node)
 
     return format_success_response(
-        {"count": len(groups), "groups": groups, "has_more": len(groups) == args.limit},
+        {"count": len(structured), "groups": structured, "has_more": len(groups) == args.limit},
         f"Group tree: {len(groups)} group(s).",
     )
 
@@ -53,6 +77,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupTreeParams)
 TOOL_METADATA = {
     "name": "exosense-get-group-tree",
-    "description": "Use for: 'Group structure', 'Hierarchy', 'Tree', 'Groups and their children'. Returns id, name, parent_id, and one level of children. For a flat list use exosense-list-groups; for one group's assets/users/devices use exosense-get-group.",
+    "description": "Use for: 'Group structure', 'Hierarchy', 'Tree', 'Groups and their children'. Returns group_id, group_name, parent_group (group_id, group_name), path_from_root (list of {group_id, group_name} from root to this group; first element = top-level/customer), and children. For 'who is the top level?' or 'who owns this group?' use path_from_root[0] or exosense-get-group-path. For a flat list use exosense-list-groups; for one group's details use exosense-get-group.",
     "inputSchema": schema,
 }

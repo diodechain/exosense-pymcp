@@ -75,6 +75,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupAssetCountParams)
 TOOL_METADATA = {
     "name": "exosense-group-asset-count",
-    "description": "Use for: 'How many assets does [group/customer] have?', 'How many assets does Mahr Brothers have deployed?', 'Asset count for group X'. Single call: pass group_name or group_id. Returns group_id, group_name, asset_count. Count includes the group and all sub-groups (recursive). Do not use get-asset-details or list-groups + get-group for this.",
+    "description": "Use for: 'How many assets does [group/customer] have?', 'Asset count for group X'. Pass group_name or group_id. Returns group_id, group_name, asset_count (recursive). For 'who is the top level?' or 'who owns this group?' use exosense-get-group-path with the group_id. Do not use get-asset-details or list-groups + get-group for counts.",
     "inputSchema": schema,
 }

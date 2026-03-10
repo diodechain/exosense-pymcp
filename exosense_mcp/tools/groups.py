@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, field_validator, ValidationError
 from ..graphql.groups import get_all_groups
 from ..types.graphql import Pagination
 from .types import ToolContext
-from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
+from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, group_children_to_structured, asset_to_structured
 
 # UUID validation regex
 UUID_REGEX = re.compile(
@@ -104,17 +104,44 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         query = get_all_groups(filters, options, pagination)
         context.log.debug("Executing query to get groups", {"filters": filters, "options": options, "pagination": pagination.model_dump()})
         result = await client.query(query)
+        raw_groups = result.get("groups", [])
+        id_to_name = {g.get("id"): g.get("name") or "" for g in raw_groups if g.get("id")}
+        for g in raw_groups:
+            for c in (g.get("children") or []):
+                if c.get("id"):
+                    id_to_name[c["id"]] = c.get("name") or ""
+        structured_groups = []
+        for g in raw_groups:
+            node = group_to_structured(g, id_to_name=id_to_name)
+            if args.include_children and g.get("children"):
+                node["children"] = group_children_to_structured(
+                    g["children"],
+                    parent_id=g.get("id"),
+                    parent_name=g.get("name") or "",
+                )
+            if args.include_assets and g.get("assets"):
+                node["assets"] = [
+                    asset_to_structured(a, group_id=g.get("id"), group_name=g.get("name") or "")
+                    for a in g["assets"]
+                ]
+            if args.include_devices and g.get("devices"):
+                node["devices"] = g.get("devices", [])
+            if args.include_users and g.get("users"):
+                node["users"] = g.get("users", [])
+            if args.include_roles and g.get("roles"):
+                node["roles"] = g.get("roles", [])
+            structured_groups.append(node)
 
         return format_success_response(
             {
-                "count": len(result.get("groups", [])),
-                "groups": result.get("groups", []),
+                "count": len(structured_groups),
+                "groups": structured_groups,
                 "filters": filters,
                 "options": options,
                 "pagination": {
                     "limit": args.limit,
                     "offset": args.offset,
-                    "hasMore": len(result.get("groups", [])) == args.limit,
+                    "hasMore": len(raw_groups) == args.limit,
                 },
             }
         )
@@ -128,6 +155,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupsParams)
 TOOL_METADATA = {
     "name": "exosense-get-groups",
-    "description": "Full groups query with all filter and include options. Prefer exosense-list-groups (count/list/search), exosense-get-group-tree (hierarchy), or exosense-get-group (one group by ID with optional assets/devices/users) for common questions to keep queries light and responses small. Use this tool only when you need a combination not covered by those.",
+    "description": "Full groups query with all filter and include options. Prefer exosense-list-groups, exosense-get-group-tree (includes path_from_root), or exosense-get-group for common questions. For 'who is the top level?' or 'who owns this group?' use exosense-get-group-path with group_id.",
     "inputSchema": schema
 }

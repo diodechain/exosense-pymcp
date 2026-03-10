@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..graphql.groups import get_groups_with_asset_ids
 from ..types.graphql import Pagination
 from .types import ToolContext
-from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
+from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, path_from_root_for_group
 from . import asset_statuses
 
 
@@ -182,9 +182,17 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             ginfo = group_info.get(gid, {})
             path = group_path.get(gid, "") or (ginfo.get("name") or gid)
             top = path.split(" > ")[1] if " > " in path else (ginfo.get("name") or "Unmapped")
+            parent_id = ginfo.get("parent_id")
+            parent_group = None
+            if parent_id and gid != "_unmapped_":
+                parent_ginfo = group_info.get(parent_id, {})
+                parent_group = {"group_id": parent_id, "group_name": parent_ginfo.get("name")}
+            path_from_root = path_from_root_for_group(gid, group_info) if gid != "_unmapped_" else None
             by_group[gid] = {
                 "group_id": gid if gid != "_unmapped_" else None,
                 "group_name": ginfo.get("name", "Unmapped (group not in hierarchy)"),
+                "parent_group": parent_group,
+                "path_from_root": path_from_root,
                 "path": path if gid != "_unmapped_" else "Group not found in fetched hierarchy",
                 "customer": top,
                 "affected_asset_count": 0,
@@ -244,6 +252,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupsWithAssetIssuesParams)
 TOOL_METADATA = {
     "name": "exosense-groups-with-asset-issues",
-    "description": "Use for: 'Which customers are being impacted?', 'Which customer has been impacted the longest?' - returns groups (path, customer, count) and affected_assets with asset_id, asset_name, last_heard (ISO timestamp) per asset. Use last_heard to compute duration: oldest last_heard = longest impacted. Set include_asset_details=true for full issue list per asset.",
+    "description": "Use for: 'Which customers are being impacted?', 'Which customer has been impacted the longest?' - returns groups with group_id, group_name, parent_group, path_from_root (list from root to this group; first element = top-level/customer; use this for 'who owns' or 'who is the customer', not group names), path (string), and affected_assets (asset_id, asset_name, last_heard). Use last_heard to compute duration. Set include_asset_details=true for full issue list per asset.",
     "inputSchema": schema,
 }

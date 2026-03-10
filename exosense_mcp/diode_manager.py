@@ -348,33 +348,44 @@ def start_diode_cli() -> bool:
     with _output_lock:
         diode_output.clear()
 
+    stop_tail = threading.Event()
+
+    def tail_log() -> None:
+        """Tail DIODE_LOG_FILE and print new lines until stop_tail is set."""
+        log_path = DIODE_LOG_FILE
+        for _ in range(50):
+            if log_path.exists():
+                break
+            if stop_tail.wait(timeout=0.2):
+                return
+        if not log_path.exists():
+            return
+        try:
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                f.seek(0, 2)
+                while not stop_tail.wait(timeout=0.25):
+                    line = f.readline()
+                    if not line:
+                        continue
+                    stripped = line.rstrip()
+                    with _output_lock:
+                        diode_output.append(stripped)
+                        if len(diode_output) > 500:
+                            diode_output.pop(0)
+                    if stripped:
+                        print(f"  diode | {stripped}", flush=True)
+        except Exception:
+            pass
+
     try:
         diode_process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
 
-        def read_out() -> None:
-            if diode_process and diode_process.stdout:
-                try:
-                    for line in iter(diode_process.stdout.readline, ""):
-                        if not line:
-                            break
-                        stripped = line.rstrip()
-                        with _output_lock:
-                            diode_output.append(stripped)
-                            if len(diode_output) > 500:
-                                diode_output.pop(0)
-                        if stripped:
-                            print(f"  diode | {stripped}", flush=True)
-                except Exception:
-                    pass
-
-        t = threading.Thread(target=read_out, daemon=True)
-        t.start()
+        tail_thread = threading.Thread(target=tail_log, daemon=True)
+        tail_thread.start()
 
         print(f"✓ Diode process started (PID {diode_process.pid})")
 
@@ -383,6 +394,7 @@ def start_diode_cli() -> bool:
         while waited < 15:
             if diode_process.poll() is not None:
                 diode_error = "Diode process exited during startup"
+                stop_tail.set()
                 _print_recent_diode_output()
                 diode_process = None
                 return False
@@ -403,6 +415,7 @@ def start_diode_cli() -> bool:
         if not api_ready:
             diode_error = "Diode API did not become ready in time (check join address and network)"
             print(f"⚠ {diode_error}")
+            stop_tail.set()
             _print_recent_diode_output()
             if diode_process:
                 try:
@@ -424,6 +437,7 @@ def start_diode_cli() -> bool:
         while publish_waited < 20:
             if diode_process.poll() is not None:
                 diode_error = "Diode process exited"
+                stop_tail.set()
                 _print_recent_diode_output()
                 diode_process = None
                 return False
@@ -449,10 +463,12 @@ def start_diode_cli() -> bool:
             for u in urls:
                 print(f"  {u}")
             print("=" * 60 + "\n")
+        stop_tail.set()
         return True
     except Exception as e:
         diode_error = str(e)
         print(f"⚠ Error starting Diode: {diode_error}")
+        stop_tail.set()
         _print_recent_diode_output()
         if diode_process:
             try:

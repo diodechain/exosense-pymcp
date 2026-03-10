@@ -257,9 +257,9 @@ def _print_recent_diode_output(lines: int = 30) -> None:
         recent = list(diode_output[-lines:]) if diode_output else []
     if not recent:
         return
-    print("  Recent Diode CLI output:")
+    print("  Recent Diode CLI output:", flush=True)
     for line in recent:
-        print(f"    {line}")
+        print(f"    {line}", flush=True)
 
 
 def get_diode_connection_status() -> Dict:
@@ -283,20 +283,20 @@ def print_diode_connection_status() -> None:
     """Print Diode connection status to stdout (for debug output)."""
     s = get_diode_connection_status()
     port_start = get_diode_api_port_start()
-    print("\n" + "=" * 60)
-    print("Diode connection status")
-    print("=" * 60)
-    print(f"  API URL:            {s['api_url'] or '—'}")
-    print(f"  Diode API port:      {s['api_port'] or '—'} (auto-selected, search from {port_start})")
-    print(f"  Client ID:      {s['client_identity'] or '—'}")
-    print(f"  Mode:           {s['mode']}")
+    print("\n" + "=" * 60, flush=True)
+    print("Diode connection status", flush=True)
+    print("=" * 60, flush=True)
+    print(f"  API URL:            {s['api_url'] or '—'}", flush=True)
+    print(f"  Diode API port:      {s['api_port'] or '—'} (auto-selected, search from {port_start})", flush=True)
+    print(f"  Client ID:      {s['client_identity'] or '—'}", flush=True)
+    print(f"  Mode:           {s['mode']}", flush=True)
     if s.get("join_address"):
-        print(f"  Join address:   {s['join_address']}")
-    print(f"  Publish port:   {s['publish_port']}")
-    print(f"  Process PID:    {s['pid'] or '—'}")
+        print(f"  Join address:   {s['join_address']}", flush=True)
+    print(f"  Publish port:   {s['publish_port']}", flush=True)
+    print(f"  Process PID:    {s['pid'] or '—'}", flush=True)
     if s.get("error"):
-        print(f"  Error:          {s['error']}")
-    print("=" * 60)
+        print(f"  Error:          {s['error']}", flush=True)
+    print("=" * 60, flush=True)
 
 
 def start_diode_cli() -> bool:
@@ -321,14 +321,14 @@ def start_diode_cli() -> bool:
     path = find_diode_executable()
     if not path:
         diode_error = "Diode executable not found. Install from https://diode.io/download/#cli"
-        print(f"⚠ {diode_error}")
+        print(f"⚠ {diode_error}", flush=True)
         return False
 
     port_start = get_diode_api_port_start()
     free_port = find_free_port(port_start)
     if not free_port:
         diode_error = f"No free port in range starting at {port_start}"
-        print(f"⚠ {diode_error}")
+        print(f"⚠ {diode_error}", flush=True)
         return False
 
     _actual_api_port = free_port
@@ -342,7 +342,7 @@ def start_diode_cli() -> bool:
     cmd = build_diode_command()
     if not cmd:
         diode_error = "Could not build Diode command"
-        print(f"⚠ {diode_error}")
+        print(f"⚠ {diode_error}", flush=True)
         return False
 
     with _output_lock:
@@ -387,7 +387,7 @@ def start_diode_cli() -> bool:
         tail_thread = threading.Thread(target=tail_log, daemon=True)
         tail_thread.start()
 
-        print(f"✓ Diode process started (PID {diode_process.pid})")
+        print(f"✓ Diode process started (PID {diode_process.pid})", flush=True)
 
         waited = 0.0
         api_ready = False
@@ -395,6 +395,7 @@ def start_diode_cli() -> bool:
             if diode_process.poll() is not None:
                 diode_error = "Diode process exited during startup"
                 stop_tail.set()
+                print("⚠ Diode CLI: process exited during startup.", flush=True)
                 _print_recent_diode_output()
                 diode_process = None
                 return False
@@ -414,7 +415,7 @@ def start_diode_cli() -> bool:
 
         if not api_ready:
             diode_error = "Diode API did not become ready in time (check join address and network)"
-            print(f"⚠ {diode_error}")
+            print("⚠ Diode CLI: API did not become ready in time (check join address and network).", flush=True)
             stop_tail.set()
             _print_recent_diode_output()
             if diode_process:
@@ -430,7 +431,7 @@ def start_diode_cli() -> bool:
             return False
 
         # Poll API for publish state (perimeter bind); see llm-pipeline-demo
-        print("Diode Client auto started, but port not yet published - please check your perimeter settings")
+        print("Diode Client auto started, waiting for port to be published...", flush=True)
         publish_ready = False
         published_config = None
         publish_waited = 0.0
@@ -438,6 +439,7 @@ def start_diode_cli() -> bool:
             if diode_process.poll() is not None:
                 diode_error = "Diode process exited"
                 stop_tail.set()
+                print("⚠ Diode CLI: process exited while waiting for publish.", flush=True)
                 _print_recent_diode_output()
                 diode_process = None
                 return False
@@ -453,21 +455,21 @@ def start_diode_cli() -> bool:
         external_port = _external_publish_port_from_config(published_config) if published_config else None
         display_port = external_port if external_port is not None else _publish_port
         if publish_ready and identity:
-            print(f"Diode Client is publishing this server at {identity}.diode.link:{display_port}")
+            print(f"✓ Diode CLI: publishing at {identity}.diode.link:{display_port}", flush=True)
         elif not publish_ready:
-            print("Diode Client auto started, but port not yet published - please check your perimeter settings")
+            print("⚠ Diode CLI: port not yet published (check perimeter settings).", flush=True)
         print_diode_connection_status()
         if identity and publish_ready:
             urls = get_published_mcp_urls(published_config)
-            print("MCP server is published at:")
+            print("MCP server is published at:", flush=True)
             for u in urls:
-                print(f"  {u}")
-            print("=" * 60 + "\n")
+                print(f"  {u}", flush=True)
+            print("=" * 60 + "\n", flush=True)
         stop_tail.set()
         return True
     except Exception as e:
         diode_error = str(e)
-        print(f"⚠ Error starting Diode: {diode_error}")
+        print(f"⚠ Diode CLI: error starting — {diode_error}", flush=True)
         stop_tail.set()
         _print_recent_diode_output()
         if diode_process:

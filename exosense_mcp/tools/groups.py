@@ -17,18 +17,17 @@ UUID_REGEX = re.compile(
 class GroupsParams(BaseModel):
     """Parameters for groups tool"""
 
-    group_type_id: Optional[str] = Field(None, description="Filter by group type ID")
-    group_id: Optional[str] = Field(None, description="Filter by specific group ID")
-    recurse: Optional[bool] = Field(None, description="Whether to recurse through child groups")
-    text: Optional[str] = Field(None, description="Text search filter for group names or descriptions")
-    # Booleans with defaults: allow None and fall back to defaults
-    include_children: Optional[bool] = Field(False, description="Include child groups in the response")
-    include_assets: Optional[bool] = Field(False, description="Include assets in the response")
-    include_devices: Optional[bool] = Field(False, description="Include devices in the response")
-    include_users: Optional[bool] = Field(False, description="Include users in the response")
-    include_roles: Optional[bool] = Field(False, description="Include roles in the response")
-    limit: int = Field(25, ge=1, le=100, description="Maximum number of groups to return (1-100, default 25)")
-    offset: int = Field(0, ge=0, description="Number of groups to skip for pagination (default 0)")
+    group_type_id: Optional[str] = Field(None, description="Filter by group type ID (UUID). Omit to get all group types.")
+    group_id: Optional[str] = Field(None, description="Filter by a specific group ID (UUID). Use when the user asks about one group or 'groups under X'. Omit to list from root.")
+    recurse: Optional[bool] = Field(None, description="When true, include child groups in the hierarchy. Use when the user asks for 'all groups', 'group tree', 'subgroups', or 'children'.")
+    text: Optional[str] = Field(None, description="Search group names or descriptions by text. Use when the user searches by name (e.g. 'groups named West', 'find group containing Building').")
+    include_children: Optional[bool] = Field(False, description="Include child groups in each group in the response. Set true when user asks for 'groups and their children', 'group structure', or 'hierarchy'.")
+    include_assets: Optional[bool] = Field(False, description="Include assets belonging to each group. Set true when user asks for 'groups with their assets', 'what assets are in each group', or 'assets per group'.")
+    include_devices: Optional[bool] = Field(False, description="Include IoT devices owned by each group. Set true when user asks for 'groups with devices', 'devices per group', or 'device ownership'.")
+    include_users: Optional[bool] = Field(False, description="Include users assigned to each group. Set true when user asks for 'who has access', 'users in a group', or 'group membership'.")
+    include_roles: Optional[bool] = Field(False, description="Include roles defined at each group. Set true when user asks for 'roles per group' or 'permissions by group'.")
+    limit: int = Field(25, ge=1, le=100, description="Maximum number of groups to return (1-100, default 25). Increase for 'list all groups' or large orgs.")
+    offset: int = Field(0, ge=0, description="Number of groups to skip for pagination (default 0). Use with limit for paging.")
 
     @field_validator("group_id")
     @classmethod
@@ -40,10 +39,25 @@ class GroupsParams(BaseModel):
 
 async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:
     """Get groups from ExoSense with optional filtering and include options"""
+    args_in = dict(arguments)
+    if args_in.get("limit") is None:
+        args_in["limit"] = 25
+    else:
+        try:
+            args_in["limit"] = int(args_in["limit"])
+        except (TypeError, ValueError):
+            args_in["limit"] = 25
+    if args_in.get("offset") is None:
+        args_in["offset"] = 0
+    else:
+        try:
+            args_in["offset"] = int(args_in["offset"])
+        except (TypeError, ValueError):
+            args_in["offset"] = 0
     try:
         # Validate arguments with Pydantic
         try:
-            args = GroupsParams(**arguments)
+            args = GroupsParams(**args_in)
             # Ensure boolean include flags fall back to defaults when None is passed
             if args.include_children is None:
                 args.include_children = False
@@ -114,6 +128,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupsParams)
 TOOL_METADATA = {
     "name": "exosense-get-groups",
-    "description": "Get groups from ExoSense with optional filtering and include options. Includes pagination support for large datasets.",
+    "description": "Full groups query with all filter and include options. Prefer exosense-list-groups (count/list/search), exosense-get-group-tree (hierarchy), or exosense-get-group (one group by ID with optional assets/devices/users) for common questions to keep queries light and responses small. Use this tool only when you need a combination not covered by those.",
     "inputSchema": schema
 }

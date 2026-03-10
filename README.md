@@ -4,6 +4,9 @@ A Model Context Protocol (MCP) server for interacting with the ExoSense platform
 
 ## Overview
 
+Invoked by:
+python3 -m exosense_mcp.server
+
 This MCP server provides tools to interact with ExoSense devices, sensors, groups, assets, and data through a standardized GraphQL interface. It features a modular architecture with session-based authentication and supports comprehensive IoT device management operations.
 
 The server is implemented using `aiohttp` and follows the JSON-RPC 2.0 protocol for MCP communication. Tools are loaded dynamically from a configuration file, making it easy to add or modify tools without changing the core server code.
@@ -166,6 +169,21 @@ To connect an MCP client to the ExoSense MCP server, configure your client with:
 ```
 
 **Note**: If `HTTP_STREAMING=Private` is set in the server's `.env` file, headers are optional as the server will use `.env` authentication.
+
+### Diode (optional – publish MCP over the internet)
+
+You can run the server’s **own Diode client** so the MCP endpoint is reachable over Diode without coordinating an external Diode client.
+
+1. **Install the Diode CLI** from [https://diode.io/download#cli](https://diode.io/download#cli) so the `diode` binary is on your PATH (or in the project directory).
+2. In **`config.yml`**, set:
+   ```yaml
+   auto-start-diode: true
+   ```
+3. Start the server as usual: `python3 -m exosense_mcp.server`
+
+The server will spawn the Diode CLI on startup, create a local client database under **`diode_client/`**, and print the public MCP URL (e.g. `https://<client>.diode.link:9000/mcp`). Use that URL in your MCP client for remote or shared access. The Diode process is stopped automatically when the server exits.
+
+To use a private Diode network instead of public publish, set **`diode_join_address`** in `config.yml` to your join address.
 
 ## Development
 

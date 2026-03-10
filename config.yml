@@ -1,14 +1,36 @@
 # MCP Server Configuration
 # Lists all available tools and their file locations
 
+# Optional: set to true to auto-launch the Diode CLI and publish MCP at https://<client>.diode.link:PORT/mcp
+# No external Diode client needed; this repo runs its own client (data in diode_client/).
+auto-start-diode: true
+
+# Optional: Diode join address for private networks. Omit or leave unset for public publish.
+diode_join_address: "0x5d877ed61ecEc351a40c964516C998FecD458772"
+
+# Optional: first port to try when finding a free port for the Diode API (default 30000).
+# diode_api_port_start: 30000
+
 tools:
   # Temporarily disabled - keeping only find_asset active
   # - file: exosense_mcp/tools/current_user.py
   #   name: exosense-current-user
   # - file: exosense_mcp/tools/root_group.py
   #   name: exosense-get-root-group
-  # - file: exosense_mcp/tools/groups.py
-  #   name: exosense-get-groups
+  # Focused group tools (light queries, simple LLM mapping)
+  - file: exosense_mcp/tools/list_groups.py
+    name: exosense-list-groups
+  - file: exosense_mcp/tools/group_tree.py
+    name: exosense-get-group-tree
+  - file: exosense_mcp/tools/group_detail.py
+    name: exosense-get-group
+  - file: exosense_mcp/tools/group_asset_count.py
+    name: exosense-group-asset-count
+  - file: exosense_mcp/tools/groups_with_asset_issues.py
+    name: exosense-groups-with-asset-issues
+  # Flexible groups (all options); prefer the tools above for common questions
+  - file: exosense_mcp/tools/groups.py
+    name: exosense-get-groups
   # - file: exosense_mcp/tools/products.py
   #   name: exosense-get-products
   # - file: exosense_mcp/tools/devices.py
@@ -20,6 +42,12 @@ tools:
     name: exosense-get-asset-details
   - file: exosense_mcp/tools/find_asset.py
     name: exosense-find-asset
+  # Focused asset tools (light responses, simple LLM mapping)
+  - file: exosense_mcp/tools/asset_health_summary.py
+    name: exosense-asset-health-summary
+  - file: exosense_mcp/tools/asset_issues_list.py
+    name: exosense-asset-issues-list
+  # Full status tool; prefer health-summary or issues-list for common questions
   - file: exosense_mcp/tools/asset_statuses.py
     name: exosense-get-asset-statuses
   # - file: exosense_mcp/tools/insight_modules.py

@@ -5,11 +5,113 @@ from ..exosense_client import GraphQLQuery
 from ..types.graphql import Pagination
 
 
+def get_group_totals_recursive(
+    group_id: str,
+) -> GraphQLQuery:
+    """One group with totals(recurse: true) for assets — count includes all sub-groups."""
+    return GraphQLQuery(
+        query="""
+        query getGroupTotalsRecursive($filters: GroupFilters) {
+          groups(filters: $filters, pagination: { limit: 1, offset: 0 }) {
+            id
+            name
+            parent_id
+            totals(recurse: true) {
+              assets
+            }
+          }
+        }
+        """,
+        variables={"filters": {"group_id": group_id}},
+        operation_name="getGroupTotalsRecursive",
+    )
+
+
 def get_root_group_id() -> GraphQLQuery:
     """Query to get the root Group ID"""
     return GraphQLQuery(
         query='query getRootGroupId { groups(filters: { text: "root" }) { id name } }',
         operation_name="getRootGroupId",
+    )
+
+
+def get_groups_list(
+    filters: Optional[Dict[str, Any]] = None,
+    pagination: Optional[Pagination] = None,
+) -> GraphQLQuery:
+    """Minimal query: id, name, parent_id only. Use for list/count/search."""
+    filters = filters or {}
+    pagination_dict = (
+        pagination.model_dump(exclude_none=True)
+        if isinstance(pagination, Pagination)
+        else pagination
+    )
+    return GraphQLQuery(
+        query="""
+        query getGroupsList($filters: GroupFilters, $pagination: Pagination = null) {
+          groups(filters: $filters, pagination: $pagination) {
+            id
+            name
+            parent_id
+          }
+        }
+        """,
+        variables={"filters": filters, "pagination": pagination_dict},
+        operation_name="getGroupsList",
+    )
+
+
+def get_groups_with_asset_ids(
+    filters: Optional[Dict[str, Any]] = None,
+    pagination: Optional[Pagination] = None,
+) -> GraphQLQuery:
+    """Minimal: id, name, parent_id, and assets { id } only. Use to map asset_id -> group."""
+    filters = filters or {}
+    pagination_dict = (
+        pagination.model_dump(exclude_none=True)
+        if isinstance(pagination, Pagination)
+        else pagination
+    )
+    return GraphQLQuery(
+        query="""
+        query getGroupsWithAssetIds($filters: GroupFilters, $pagination: Pagination = null) {
+          groups(filters: $filters, pagination: $pagination) {
+            id
+            name
+            parent_id
+            assets(pagination: { limit: 500, offset: 0 }) { id }
+          }
+        }
+        """,
+        variables={"filters": filters, "pagination": pagination_dict},
+        operation_name="getGroupsWithAssetIds",
+    )
+
+
+def get_groups_tree(
+    filters: Optional[Dict[str, Any]] = None,
+    pagination: Optional[Pagination] = None,
+) -> GraphQLQuery:
+    """Light hierarchy: id, name, parent_id, children (id, name only). Use for structure/tree."""
+    filters = filters or {}
+    pagination_dict = (
+        pagination.model_dump(exclude_none=True)
+        if isinstance(pagination, Pagination)
+        else pagination
+    )
+    return GraphQLQuery(
+        query="""
+        query getGroupsTree($filters: GroupFilters, $pagination: Pagination = null) {
+          groups(filters: $filters, pagination: $pagination) {
+            id
+            name
+            parent_id
+            children(pagination: $pagination) { id name parent_id }
+          }
+        }
+        """,
+        variables={"filters": filters, "pagination": pagination_dict},
+        operation_name="getGroupsTree",
     )
 
 

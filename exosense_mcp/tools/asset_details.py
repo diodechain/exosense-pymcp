@@ -16,10 +16,10 @@ class AssetDetailsParams(BaseModel):
     """Parameters for asset details tool"""
 
     asset_id: Optional[str] = Field(
-        None, description="The ID of the asset to retrieve (UUID format)"
+        None, description="UUID of the one specific asset the user asked about (do not use for counts or discovery)"
     )
     asset_name: Optional[str] = Field(
-        None, description="The name of the asset to retrieve (exact match)"
+        None, description="Exact name of the one specific asset the user asked about (do not use for counts or discovery)"
     )
     # Booleans with defaults: allow None and fall back to defaults.
     # NOTE: include_data defaults to False to keep responses compact unless
@@ -152,6 +152,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetDetailsParams)
 TOOL_METADATA = {
     "name": "exosense-get-asset-details",
-    "description": "Get latest data and statistics for a specific asset. Returns asset summary with latest data points from all signals (value, timestamp, signal name). Use this tool when asked about 'latest data', 'current readings', 'sensor values', or 'what is the data from X'. Accepts either asset_id (UUID) or asset_name (exact match). For health/status/connectivity information, use exosense-get-asset-statuses instead.",
+    "description": "ONLY for detailed info on ONE specific asset that the user has already identified by name or ID. Use when the user asks about 'latest data for [asset name]', 'current readings for X', 'sensor values for asset Y', or 'details of this asset'. Requires asset_id (UUID) or asset_name (exact match). NEVER use for: asset counts, 'how many assets', 'how many assets do I have', overview, health summary, or listing assets. For counts/overview/health summary always use exosense-asset-health-summary instead. For status of many assets use exosense-get-asset-statuses.",
     "inputSchema": schema
 }

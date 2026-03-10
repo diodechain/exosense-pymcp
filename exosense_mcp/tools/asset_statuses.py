@@ -429,6 +429,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     assets_offline_list.append({
                         "asset_id": asset_id,
                         "asset_name": asset_name,
+                        "last_heard": last_heard,
                     })
                 elif args.filter_category == "offline":
                     # Filter is for offline - include it
@@ -436,6 +437,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     assets_offline_list.append({
                         "asset_id": asset_id,
                         "asset_name": asset_name,
+                        "last_heard": last_heard,
                     })
                 # If filter is for a different category (e.g., timeout), don't count offline separately
             
@@ -682,6 +684,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetStatusesParams)
 TOOL_METADATA = {
     "name": "exosense-get-asset-statuses",
-    "description": "Check asset health, connectivity, and status conditions across one or many assets. Use this tool DIRECTLY for questions about asset health - it automatically fetches assets internally if needed. You do NOT need to call get-assets first. Returns an aggregated health summary including: total assets checked, count of assets with issues, offline assets, and problem categories. CRITICAL RULE: If the user asks for ASSET NAMES, 'what are the names', 'which assets', 'list of assets', 'what assets', or ANY question asking for specific asset identification, you MUST set include_details=true. Do NOT set include_details=true for 'overview', 'summary', 'health check', 'status', or general questions that don't ask for asset names. FILTERING (IMPORTANT FOR EFFICIENCY): When user asks about specific categories/levels (e.g., 'critical assets in timeouts', 'names of assets with critical timeout issues', 'what are the names of assets with critical timeout issues'), you MUST set filter_category and filter_level to reduce data returned on the server side. Examples: 'critical assets in timeouts' -> filter_category='timeout', filter_level='critical', include_details=true. 'names of assets with critical timeout issues' -> filter_category='timeout', filter_level='critical', include_details=true. 'assets with timeout issues' -> filter_category='timeout', include_details=true. When filters are applied, only matching assets are returned, significantly reducing response size. When include_details=true, the response includes: assets_with_issues_details (list of assets with problems including structured category/level info), assets_by_category_level (helper object for filtering: {category: {level: [assets]}} - only included when no filters applied), assets_offline_details (list of offline assets with names), and assets_healthy_details (list of healthy assets). The message field will also include asset names when include_details=true. If asset_ids is not provided, automatically fetches and checks all assets (up to max_assets limit, default 100). IMPORTANT: asset_ids must be a list/array of strings, e.g. ['id1', 'id2'] or ['id1']. For a single asset, use ['asset_id'] not 'asset_id'. Examples: 'overview of health' -> include_details=false, 'what are the names of critical assets in timeouts?' -> filter_category='timeout', filter_level='critical', include_details=true, 'which assets are offline?' -> include_details=true.",
+    "description": "Asset status with options. For 'how long has X had issues?', 'how long offline?', 'duration of the issue' - use this with include_details=true; response includes last_heard (ISO timestamp) per asset so you can compute or describe how long since last communication. For 'how many assets?', 'overview': prefer exosense-asset-health-summary. For 'which assets have issues?': prefer exosense-asset-issues-list. Use this when you need offline/healthy lists, custom asset_ids, full status, or last_heard for duration.",
     "inputSchema": schema
 }

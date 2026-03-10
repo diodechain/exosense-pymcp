@@ -2,6 +2,7 @@
 MCP Server implementation for ExoSense using aiohttp.
 Compatible with Python 3.9+.
 """
+import atexit
 import json
 import uuid
 import importlib.util
@@ -1017,7 +1018,23 @@ def main():
     observer = None
     if os.getenv("HOT_RELOAD", "true").lower() in ("true", "1", "yes"):
         observer = start_file_watcher()
-    
+
+    # Optional: auto-launch Diode CLI to publish MCP over Diode (no external client needed)
+    diode_started = False
+    config = load_config()
+    auto_start_diode = config.get("auto-start-diode", False)
+    if auto_start_diode:
+        try:
+            from exosense_mcp.diode_manager import set_publish_port, start_diode_cli, cleanup_diode
+            set_publish_port(PORT)
+            if start_diode_cli():
+                diode_started = True
+                atexit.register(cleanup_diode)
+            else:
+                logger.warning("Diode auto-start failed; MCP server will run locally only.")
+        except Exception as e:
+            logger.warning("Could not start Diode client: %s. MCP server will run locally only.", e)
+
     app = create_app()
     logger.info("=" * 80)
     logger.info("🚀 STARTING EXOSENSE MCP SERVER")
@@ -1053,6 +1070,12 @@ def main():
     except KeyboardInterrupt:
         logger.info("🛑 Shutting down server...")
     finally:
+        if diode_started:
+            try:
+                from exosense_mcp.diode_manager import cleanup_diode
+                cleanup_diode()
+            except Exception as e:
+                logger.warning("Error shutting down Diode client: %s", e)
         stop_file_watcher(observer)
 
 

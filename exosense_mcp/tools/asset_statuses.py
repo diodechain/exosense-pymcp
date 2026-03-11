@@ -40,12 +40,13 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                 if asset_ids is None or asset_ids == 'None' or asset_ids == '' or (isinstance(asset_ids, str) and asset_ids.lower() == 'none'):
                     arguments['asset_ids'] = None
                 elif isinstance(asset_ids, str):
-                    # Single ID as string - but check if it's 'None' first
+                    # 'None' or empty -> None
                     if asset_ids.lower() == 'none' or asset_ids == '':
                         arguments['asset_ids'] = None
                     else:
-                        # Single ID as string - convert to list
-                        arguments['asset_ids'] = [asset_ids]
+                        # LLMs often send comma-separated IDs; split so we get a real list (batch_size=1 then runs one ID per request)
+                        parts = [p.strip() for p in asset_ids.split(",") if p and p.strip()]
+                        arguments['asset_ids'] = parts if parts else [asset_ids]
                 elif isinstance(asset_ids, list):
                     # Filter out None, 'None', and empty strings from list
                     filtered = [aid for aid in asset_ids if aid is not None and aid != 'None' and aid != '' and str(aid).lower() != 'none']

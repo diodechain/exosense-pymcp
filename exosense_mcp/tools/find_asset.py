@@ -58,6 +58,54 @@ def calculate_similarity(query: str, target: str) -> float:
     return max(0.1, char_similarity * 0.3)
 
 
+def _build_no_match_payload(query: str) -> Dict[str, Any]:
+    """Payload when no assets match the main query."""
+    return {
+        "query": query,
+        "matches": [],
+        "count": 0,
+        "message": "No assets found matching the query",
+    }
+
+
+async def _fallback_searches_by_word(
+    client: Any,
+    args: Any,
+    options: dict,
+    pagination: Any,
+    context: ToolContext,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """
+    When the main query has multiple words and returns no matches, search each word
+    independently and return compact results so the LLM can suggest or use them.
+    """
+    words = [w.strip() for w in args.query.split() if w.strip()]
+    if len(words) < 2:
+        return None
+    fallback: Dict[str, Dict[str, Any]] = {}
+    limit_per_word = min(10, args.limit * 2)  # cap size
+    for word in words:
+        filters = {"text": word}
+        query = get_assets(filters, options, pagination)
+        result = await client.query(query)
+        assets = result.get("assets", []) or []
+        scored = []
+        for asset in assets:
+            name = asset.get("name") or "Unnamed Asset"
+            sim = calculate_similarity(word, name)
+            if sim >= args.min_similarity:
+                scored.append({"asset": asset, "similarity": sim})
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        scored = scored[:limit_per_word]
+        matches = [
+            {"asset_id": a["asset"].get("id"), "asset_name": a["asset"].get("name") or ""}
+            for a in scored
+        ]
+        if matches:
+            fallback[word] = {"matches": matches, "count": len(matches)}
+    return fallback if fallback else None
+
+
 class FindAssetParams(BaseModel):
     """Parameters for find asset tool"""
 
@@ -103,14 +151,15 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 
         assets = result.get("assets", [])
         if not assets:
+            # No hits: try each word independently so the LLM has alternatives (e.g. "circulation fan" -> "circulation", "fan")
+            payload = _build_no_match_payload(args.query)
+            fallback = await _fallback_searches_by_word(client, args, options, pagination, context)
+            if fallback:
+                payload["fallback_searches"] = fallback
+                payload["message"] = "No assets found for the full query; search each word separately for alternatives."
             return format_success_response(
-                {
-                    "query": args.query,
-                    "matches": [],
-                    "count": 0,
-                    "message": "No assets found matching the query",
-                },
-                f'No assets found matching "{args.query}"',
+                payload,
+                f'No assets found matching "{args.query}"' + ("; see fallback_searches for results by word." if fallback else ""),
             )
 
         # Calculate similarity scores for all assets
@@ -135,6 +184,25 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         # Sort by similarity descending and take top N
         assets_with_scores.sort(key=lambda x: x["similarity"], reverse=True)
         assets_with_scores = assets_with_scores[: args.limit]
+
+        # If main query returned assets but none passed similarity, try fallback by word
+        if not assets_with_scores:
+            words = [w.strip() for w in args.query.split() if w.strip()]
+            if len(words) >= 2:
+                fallback = await _fallback_searches_by_word(client, args, options, pagination, context)
+                if fallback:
+                    payload = {
+                        "query": args.query,
+                        "matches": [],
+                        "count": 0,
+                        "min_similarity": args.min_similarity,
+                        "message": "No assets matched the full query; search each word separately for alternatives.",
+                        "fallback_searches": fallback,
+                    }
+                    return format_success_response(
+                        payload,
+                        f'No assets found matching "{args.query}"; see fallback_searches for results by word.',
+                    )
 
         # Keep response under ~4k chars: use compact format (id + name only) when many matches
         max_full = 10
@@ -179,6 +247,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(FindAssetParams)
 TOOL_METADATA = {
     "name": "exosense-find-asset",
-    "description": "Find assets by type, category, or name. CALL THIS whenever the user asks about assets, devices, or infrastructure by kind (e.g. 'circulation fans', 'pumps', 'sensors', 'batteries', 'HVAC') — including 'how many X have reported', 'which X', 'list X assets', 'X that reported today'. Use the asset type/category as the query (e.g. query 'circulation fan'). Do not say you lack data without calling this tool first. Returns asset_id, asset_name, similarity_score. Then use exosense-get-asset-statuses with the returned asset_ids to check reporting/health. Pass ALL found asset_ids in one call.",
+    "description": "Find assets by type, category, or name. CALL THIS whenever the user asks about assets, devices, or infrastructure by kind (e.g. 'circulation fans', 'pumps', 'sensors'). Use the asset type/category as the query (e.g. 'circulation fan'). When the full query returns no matches, the tool may return fallback_searches: results for each word separately (e.g. 'circulation' and 'fan') — use those asset_ids to answer the user (e.g. 'No exact match; found N assets for \"circulation\" (Circulation Group 01). Checking their status.') and call exosense-get-asset-statuses with the chosen fallback asset_ids. Returns asset_id, asset_name; then use get-asset-statuses with ALL relevant asset_ids.",
     "inputSchema": schema
 }

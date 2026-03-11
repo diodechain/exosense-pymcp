@@ -43,6 +43,7 @@ fragment SignalChannelConfig on SignalChannelConfig {
 ASSETS_QUERY = """
 query getAssets($filters: AssetFilters,
   $includeTemplates: Boolean = false,
+  $includeAssetType: Boolean = false,
   $includeParent: Boolean = false,
   $includeMeta: Boolean = false,
   $includeLocation: Boolean = false,
@@ -56,6 +57,7 @@ query getAssets($filters: AssetFilters,
     meta @include(if: $includeMeta)
     location @include(if: $includeLocation) { mode signal }
     template @include(if: $includeTemplates) { id name }
+    assetType @include(if: $includeAssetType) { name }
     signals {
       id
       name
@@ -183,6 +185,7 @@ def get_assets(
         pagination_dict = pagination
 
     include_templates = options.get("includeTemplates", False)
+    include_asset_type = options.get("includeAssetType", False)
     include_parent = options.get("includeParent", False)
     include_meta = options.get("includeMeta", False)
     include_location = options.get("includeLocation", False)
@@ -195,6 +198,7 @@ def get_assets(
         variables={
             "filters": filters,
             "includeTemplates": include_templates,
+            "includeAssetType": include_asset_type,
             "includeParent": include_parent,
             "includeMeta": include_meta,
             "includeLocation": include_location,

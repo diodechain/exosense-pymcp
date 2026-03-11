@@ -103,6 +103,9 @@ async def _fallback_searches_by_word(
             t = a["asset"].get("template")
             if isinstance(t, dict) and t.get("name"):
                 m["template_name"] = t.get("name") or ""
+            at = a["asset"].get("assetType")
+            if isinstance(at, dict) and at.get("name"):
+                m["asset_type_name"] = at.get("name") or ""
             matches.append(m)
         if matches:
             fallback[word] = {"matches": matches, "count": len(matches)}
@@ -140,6 +143,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         filters: dict = {"text": args.query}
         options: dict = {
             "includeTemplates": True,
+            "includeAssetType": True,
             "includeParent": False,
             "includeMeta": False,
             "includeLocation": False,
@@ -165,7 +169,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                 f'No assets found matching "{args.query}"' + ("; see fallback_searches for results by word." if fallback else ""),
             )
 
-        # Score by asset name and optionally by template name (Exosense "type" – e.g. Fan, Pump)
+        # Score by asset name, template name, and assetType name (Exosense fleet type – e.g. Fan, Pump)
         assets_with_scores = []
         for asset in assets:
             asset_name = asset.get("name") or "Unnamed Asset"
@@ -173,8 +177,11 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             template = asset.get("template")
             template_name = (template.get("name") or "").strip() if isinstance(template, dict) else ""
             template_sim = calculate_similarity(args.query, template_name) if template_name else 0.0
-            # Use best of name or template match so "fan" matches assets with template "Fan" or name "Blast Fan 01"
-            similarity = max(name_sim, template_sim) if template_sim > 0 else name_sim
+            asset_type = asset.get("assetType")
+            type_name = (asset_type.get("name") or "").strip() if isinstance(asset_type, dict) else ""
+            type_sim = calculate_similarity(args.query, type_name) if type_name else 0.0
+            # Best of name / template / assetType so "fan" matches assetType "Fan", template "Fan", or name "Blast Fan 01"
+            similarity = max(name_sim, template_sim, type_sim) if (template_sim or type_sim) else name_sim
 
             if similarity >= args.min_similarity:
                 assets_with_scores.append(
@@ -186,6 +193,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                             "locked": asset.get("locked"),
                             "template_id": template.get("id") if isinstance(template, dict) and template.get("id") else None,
                             "template_name": template_name or None,
+                            "asset_type_name": type_name or None,
                         },
                         "similarity": similarity,
                     }
@@ -223,6 +231,8 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             base = {"asset_id": a.get("id"), "asset_name": a.get("name") or ""}
             if a.get("template_name"):
                 base["template_name"] = a["template_name"]
+            if a.get("asset_type_name"):
+                base["asset_type_name"] = a["asset_type_name"]
             if compact:
                 matches.append(base)
             else:

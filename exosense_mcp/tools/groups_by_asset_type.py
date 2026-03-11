@@ -76,6 +76,7 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         filters = {"text": args.query.strip()}
         options = {
             "includeTemplates": True,
+            "includeAssetType": True,
             "includeParent": False,
             "includeMeta": False,
             "includeLocation": False,
@@ -93,7 +94,10 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             template = asset.get("template")
             template_name = (template.get("name") or "").strip() if isinstance(template, dict) else ""
             template_sim = calculate_similarity(args.query, template_name) if template_name else 0.0
-            sim = max(name_sim, template_sim) if template_sim > 0 else name_sim
+            asset_type = asset.get("assetType")
+            type_name = (asset_type.get("name") or "").strip() if isinstance(asset_type, dict) else ""
+            type_sim = calculate_similarity(args.query, type_name) if type_name else 0.0
+            sim = max(name_sim, template_sim, type_sim) if (template_sim or type_sim) else name_sim
             if sim >= args.min_similarity:
                 scored.append({"asset": asset, "similarity": sim})
         scored.sort(key=lambda x: x["similarity"], reverse=True)
@@ -126,9 +130,10 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             offset += limit
         asset_to_group, group_info = _build_asset_to_group_and_info(all_groups)
 
-        # 3) For each matching asset, get top-level group and aggregate counts
+        # 3) For each matching asset, get "customer" = first level below root (path[1]); aggregate counts and keep path for response shape
         top_level_counts: Dict[str, int] = {}
         top_level_names: Dict[str, str] = {}
+        top_level_paths: Dict[str, List[Dict[str, str]]] = {}  # path_from_root for each customer (same shape as groups-with-asset-issues)
         unmapped = 0
         for asset_id in matching_asset_ids:
             gid = asset_to_group.get(asset_id)
@@ -136,31 +141,45 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                 unmapped += 1
                 continue
             path = path_from_root_for_group(gid, group_info)
-            top = path[0] if path else None
+            # path = [root, customer, site?, ...]; use customer (path[1]) when present, else root (path[0])
+            top = path[1] if len(path) > 1 else (path[0] if path else None)
             if top:
                 tid = top.get("group_id")
                 tname = top.get("group_name") or "Unnamed"
                 if tid:
                     top_level_counts[tid] = top_level_counts.get(tid, 0) + 1
                     top_level_names[tid] = tname
+                    # Store path from root to customer [root, customer] for response (align with groups-with-asset-issues)
+                    if tid not in top_level_paths and len(path) >= 2:
+                        top_level_paths[tid] = path[:2]
 
-        # 4) Build response: top-level groups sorted by asset count desc
-        top_level_groups = [
-            {
+        # 4) Build response: same shape as groups-with-asset-issues (customer, path_from_root, path, parent_group, asset_count)
+        sorted_tids = sorted(top_level_counts.items(), key=lambda x: -x[1])
+        top_level_groups = []
+        for tid, count in sorted_tids:
+            tname = top_level_names.get(tid) or "Unnamed"
+            path_from_root = top_level_paths.get(tid) or [{"group_id": tid, "group_name": tname}]
+            path_str = " > ".join((p.get("group_name") or "") for p in path_from_root) or tname
+            root_ent = path_from_root[0] if path_from_root else None
+            parent_group = {"group_id": root_ent.get("group_id"), "group_name": root_ent.get("group_name")} if root_ent else None
+            top_level_groups.append({
                 "group_id": tid,
-                "group_name": top_level_names.get(tid) or "Unnamed",
+                "group_name": tname,
+                "customer": tname,
+                "parent_group": parent_group,
+                "path_from_root": path_from_root,
+                "path": path_str,
                 "asset_count": count,
-            }
-            for tid, count in sorted(top_level_counts.items(), key=lambda x: -x[1])
-        ]
+            })
         payload = {
             "query": args.query,
             "total_assets_matched": len(matching_asset_ids),
             "top_level_groups": top_level_groups,
+            "total_customers_with_assets": len(top_level_groups),
         }
         if unmapped:
             payload["assets_not_in_any_group"] = unmapped
-        msg = f'Found {len(matching_asset_ids)} asset(s) matching "{args.query}" across {len(top_level_groups)} top-level group(s).'
+        msg = f'Found {len(matching_asset_ids)} asset(s) matching "{args.query}" across {len(top_level_groups)} customer(s).'
         return format_success_response(payload, msg)
     except Exception as error:
         return format_error_response(
@@ -171,6 +190,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(GroupsByAssetTypeParams)
 TOOL_METADATA = {
     "name": "exosense-groups-by-asset-type",
-    "description": "Use for: 'Which customer has the most fan-related assets?', 'Which group has the most pumps?', 'Top-level groups by asset type'. Runs a fuzzy asset search (like find-asset) for the query (e.g. 'fan'), then maps each asset to its top-level group (customer) and returns top_level_groups: [{ group_id, group_name, asset_count }] sorted by asset_count descending. Answer 'which customer has the most X' by taking the first entry in top_level_groups.",
+    "description": "Use for: 'Which customers have [fan/pump/...] assets?', 'Which customer has the most fan-related assets?', 'How many customers have X assets?'. Same approach as exosense-groups-with-asset-issues but by asset type: returns customers (first level below root) with group_id, group_name, customer, parent_group, path_from_root, path, asset_count. When answering 'which customers have X assets?' reply with a concise list of customer names and asset counts only; do NOT include path or path_from_root in the user-facing answer. Use path_from_root only when the user asks 'who is the customer?' or hierarchy. Query is the asset type (e.g. 'fan', 'pump'); uses fuzzy match on name, template, and assetType.",
     "inputSchema": schema,
 }

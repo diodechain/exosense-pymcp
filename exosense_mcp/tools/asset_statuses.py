@@ -594,16 +594,17 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
             "problem_categories": problem_categories if problem_categories else None,
         }
         
-        # Only include detailed asset lists if explicitly requested (for concise responses by default)
+        # Cap detail lists so response stays under ~4k chars; counts above are already full totals
+        MAX_DETAIL_ENTRIES = 5
         if args.include_details:
             if assets_with_issues_list:
-                summary["assets_with_issues_details"] = assets_with_issues_list
+                summary["assets_with_issues_details"] = assets_with_issues_list[:MAX_DETAIL_ENTRIES]
+                if len(assets_with_issues_list) > MAX_DETAIL_ENTRIES:
+                    summary["assets_with_issues_total"] = len(assets_with_issues_list)
                 # Add a helper field for filtering by category/level
-                # This makes it easier for LLM to answer "which assets are critical in timeouts?"
-                # Only build this if not already filtered (to avoid redundant data)
                 if not args.filter_category and not args.filter_level:
                     assets_by_category_level = {}
-                    for asset in assets_with_issues_list:
+                    for asset in assets_with_issues_list[:MAX_DETAIL_ENTRIES]:
                         categories = asset.get("categories", {})
                         for category, levels in categories.items():
                             if category not in assets_by_category_level:
@@ -618,25 +619,18 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                     if assets_by_category_level:
                         summary["assets_by_category_level"] = assets_by_category_level
                 else:
-                    # When filtered, just return the filtered list (already matches the filter)
-                    # Add a note that filtering was applied
                     summary["filter_applied"] = {
                         "category": args.filter_category,
                         "level": args.filter_level
                     }
-                    # Don't include assets_by_category_level when filtered (redundant)
-            # Include offline assets details only if no filter or filter is for offline
             if assets_offline_list and (not args.filter_category or args.filter_category == "offline"):
-                summary["assets_offline_details"] = assets_offline_list
-            
-            # Include healthy assets details (only if no filter, since filtered view doesn't show healthy)
+                summary["assets_offline_details"] = assets_offline_list[:MAX_DETAIL_ENTRIES]
+                if len(assets_offline_list) > MAX_DETAIL_ENTRIES:
+                    summary["assets_offline_total"] = len(assets_offline_list)
             if assets_healthy_list and not args.filter_category and not args.filter_level:
-                # Limit healthy assets to avoid huge responses
-                if len(assets_healthy_list) <= 10:
-                    summary["assets_healthy_details"] = assets_healthy_list
-            # Only include healthy assets if there are few enough (avoid overwhelming response)
-            if len(assets_healthy_list) <= 10:
-                summary["assets_healthy_details"] = assets_healthy_list
+                summary["assets_healthy_details"] = assets_healthy_list[:MAX_DETAIL_ENTRIES]
+                if len(assets_healthy_list) > MAX_DETAIL_ENTRIES:
+                    summary["assets_healthy_total"] = len(assets_healthy_list)
         else:
             # For concise responses, only include asset names in the message, not full details
             # The example_problems already provide some asset names

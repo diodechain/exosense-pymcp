@@ -136,24 +136,37 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         assets_with_scores.sort(key=lambda x: x["similarity"], reverse=True)
         assets_with_scores = assets_with_scores[: args.limit]
 
+        # Keep response under ~4k chars: use compact format (id + name only) when many matches
+        max_full = 10
+        compact = len(assets_with_scores) > max_full
         matches = []
         for item in assets_with_scores:
             a = item["asset"]
-            matches.append({
-                "asset_id": a.get("id"),
-                "asset_name": a.get("name") or "",
-                "description": a.get("description") or "",
-                "locked": a.get("locked"),
-                "similarity_score": round(item["similarity"], 3),
-            })
+            if compact:
+                matches.append({
+                    "asset_id": a.get("id"),
+                    "asset_name": a.get("name") or "",
+                })
+            else:
+                matches.append({
+                    "asset_id": a.get("id"),
+                    "asset_name": a.get("name") or "",
+                    "description": a.get("description") or "",
+                    "locked": a.get("locked"),
+                    "similarity_score": round(item["similarity"], 3),
+                })
+
+        payload = {
+            "query": args.query,
+            "matches": matches,
+            "count": len(matches),
+            "min_similarity": args.min_similarity,
+        }
+        if compact:
+            payload["response_compact"] = True  # Only id/name to stay under size limits
 
         return format_success_response(
-            {
-                "query": args.query,
-                "matches": matches,
-                "count": len(matches),
-                "min_similarity": args.min_similarity,
-            },
+            payload,
             f'Found {len(assets_with_scores)} asset(s) matching "{args.query}"',
         )
     except Exception as error:

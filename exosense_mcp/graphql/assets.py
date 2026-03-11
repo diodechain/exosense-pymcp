@@ -248,34 +248,61 @@ def get_asset_details(
     )
 
 
+# Minimal status query for health checks: only id, lastHeard, category + level.
+# Avoids timestamp, value, valueString, additionalFields to reduce backend load and response size.
+ASSET_STATUSES_MINIMAL_QUERY = """
+query getAssetStatuses($ids: [ID]!) {
+  assetStatuses(ids: $ids) {
+    id
+    lastHeard
+    categories(options: { limit: 1 }) {
+      category
+      values {
+        level
+      }
+    }
+  }
+}
+"""
+
+# Full status query when extra status data (e.g. duration, history) is needed.
+ASSET_STATUSES_FULL_QUERY = """
+query getAssetStatuses($ids: [ID]!, $statusLimit: Int = 1) {
+  assetStatuses(ids: $ids) {
+    id
+    lastHeard
+    categories(options: { limit: $statusLimit }) {
+      category
+      values {
+        timestamp
+        level
+        value
+        valueString
+        additionalFields
+      }
+    }
+  }
+}
+"""
+
+
 def get_asset_statuses(
     ids: List[str],
     options: Optional[Dict[str, Any]] = None,
 ) -> GraphQLQuery:
-    """Query to get asset statuses"""
+    """Query to get asset statuses. Use minimal query when extraStatusData is False to reduce backend memory and payload."""
     options = options or {}
     extra_status_data = options.get("extraStatusData", False)
-    
+
+    if extra_status_data:
+        return GraphQLQuery(
+            query=ASSET_STATUSES_FULL_QUERY,
+            variables={"ids": ids, "statusLimit": 5},
+            operation_name="getAssetStatuses",
+        )
     return GraphQLQuery(
-        query="""
-        query getAssetStatuses($ids: [ID]!, $statusLimit: Int = 1) {
-          assetStatuses(ids: $ids) {
-            id
-            lastHeard
-            categories(options: { limit: $statusLimit }) {
-              category
-              values {
-                timestamp
-                level
-                value
-                valueString
-                additionalFields
-              }
-            }
-          }
-        }
-        """,
-        variables={"ids": ids, "statusLimit": 5 if extra_status_data else 1},
+        query=ASSET_STATUSES_MINIMAL_QUERY,
+        variables={"ids": ids},
         operation_name="getAssetStatuses",
     )
 

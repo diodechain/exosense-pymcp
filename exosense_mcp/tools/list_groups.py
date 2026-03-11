@@ -8,6 +8,31 @@ from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured
 
 
+async def _fallback_searches_by_word(
+    client: Any,
+    words: list,
+    limit_per_word: int,
+    context: ToolContext,
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """
+    When a multi-word text search returns no groups, search each word independently
+    and return compact results so the LLM can suggest or use them.
+    """
+    if len(words) < 2:
+        return None
+    fallback: Dict[str, Dict[str, Any]] = {}
+    for word in words:
+        pagination = Pagination(limit=limit_per_word, offset=0)
+        query = get_groups_list({"text": word.strip()}, pagination)
+        result = await client.query(query)
+        raw = result.get("groups", []) or []
+        id_to_name = {g.get("id"): g.get("name") or "" for g in raw if g.get("id")}
+        structured = [group_to_structured(g, id_to_name=id_to_name) for g in raw]
+        if structured:
+            fallback[word] = {"groups": structured, "count": len(structured)}
+    return fallback if fallback else None
+
+
 class ListGroupsParams(BaseModel):
     limit: int = Field(25, ge=1, le=100, description="Max groups to return (default 25)")
     offset: int = Field(0, ge=0, description="Skip N groups for pagination")
@@ -50,6 +75,24 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
     id_to_name = {g.get("id"): g.get("name") or "" for g in groups if g.get("id")}
     structured = [group_to_structured(g, id_to_name=id_to_name) for g in groups]
 
+    # No hits for text search: try each word independently (same as find-asset fallback)
+    if not groups and args.text:
+        words = [w.strip() for w in args.text.split() if w.strip()]
+        if len(words) >= 2:
+            fallback = await _fallback_searches_by_word(client, words, min(10, args.limit), context)
+            if fallback:
+                payload = {
+                    "count": 0,
+                    "groups": [],
+                    "has_more": False,
+                    "message": "No groups found for the full query; search each word separately for alternatives.",
+                    "fallback_searches": fallback,
+                }
+                return format_success_response(
+                    payload,
+                    f'No groups found matching "{args.text}"; see fallback_searches for results by word.',
+                )
+
     return format_success_response(
         {
             "count": len(structured),
@@ -63,6 +106,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(ListGroupsParams)
 TOOL_METADATA = {
     "name": "exosense-list-groups",
-    "description": "Use for: 'How many groups?', 'List groups', 'What groups exist?', 'Search groups by name'. Returns group_id, group_name, parent_group (group_id, group_name). For 'who is the top level?' or 'who owns this group?' use exosense-get-group-path with the group_id. For tree structure use exosense-get-group-tree; for one group's details use exosense-get-group.",
+    "description": "Use for: 'How many groups?', 'List groups', 'What groups exist?', 'Search groups by name'. When a multi-word search returns no groups, the tool may return fallback_searches: results for each word (e.g. 'circulation' and 'fan') — use those to suggest alternatives (e.g. 'No exact match; found N groups for \"circulation\" (Circulation Group 01).'). Returns group_id, group_name, parent_group (group_id, group_name). For 'who is the top level?' use exosense-get-group-path; for tree use exosense-get-group-tree; for one group use exosense-get-group.",
     "inputSchema": schema,
 }

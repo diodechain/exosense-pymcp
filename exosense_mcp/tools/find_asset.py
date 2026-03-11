@@ -166,6 +166,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(FindAssetParams)
 TOOL_METADATA = {
     "name": "exosense-find-asset",
-    "description": "Find assets by fuzzy name matching. Useful when you have a partial or approximate asset name (e.g., 'my battery' to find 'Battery Bank'). Returns asset_id, asset_name, description, similarity_score. Use this tool first when you need to find assets before checking their health, status, or details. After finding assets, pass ALL found asset_ids to 'exosense-get-asset-statuses' in a single call, e.g. {'asset_ids': ['id1', 'id2']} - do NOT call get-asset-statuses separately for each asset.",
+    "description": "Find assets by type, category, or name. CALL THIS whenever the user asks about assets, devices, or infrastructure by kind (e.g. 'circulation fans', 'pumps', 'sensors', 'batteries', 'HVAC') — including 'how many X have reported', 'which X', 'list X assets', 'X that reported today'. Use the asset type/category as the query (e.g. query 'circulation fan'). Do not say you lack data without calling this tool first. Returns asset_id, asset_name, similarity_score. Then use exosense-get-asset-statuses with the returned asset_ids to check reporting/health. Pass ALL found asset_ids in one call.",
     "inputSchema": schema
 }

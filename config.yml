@@ -30,6 +30,8 @@ tools:
     name: exosense-group-asset-count
   - file: exosense_mcp/tools/groups_with_asset_issues.py
     name: exosense-groups-with-asset-issues
+  - file: exosense_mcp/tools/groups_by_asset_type.py
+    name: exosense-groups-by-asset-type
   # Flexible groups (all options); prefer the tools above for common questions
   - file: exosense_mcp/tools/groups.py
     name: exosense-get-groups

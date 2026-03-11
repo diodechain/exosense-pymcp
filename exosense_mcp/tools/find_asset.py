@@ -97,10 +97,13 @@ async def _fallback_searches_by_word(
                 scored.append({"asset": asset, "similarity": sim})
         scored.sort(key=lambda x: x["similarity"], reverse=True)
         scored = scored[:limit_per_word]
-        matches = [
-            {"asset_id": a["asset"].get("id"), "asset_name": a["asset"].get("name") or ""}
-            for a in scored
-        ]
+        matches = []
+        for a in scored:
+            m = {"asset_id": a["asset"].get("id"), "asset_name": a["asset"].get("name") or ""}
+            t = a["asset"].get("template")
+            if isinstance(t, dict) and t.get("name"):
+                m["template_name"] = t.get("name") or ""
+            matches.append(m)
         if matches:
             fallback[word] = {"matches": matches, "count": len(matches)}
     return fallback if fallback else None
@@ -133,10 +136,10 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         import exosense_mcp.server as server_module
         client = server_module.get_exosense_client(auth)
 
-        # Use text filter as a first pass to narrow down results
+        # Use text filter as a first pass; include template so we can match by "asset type" (template name)
         filters: dict = {"text": args.query}
         options: dict = {
-            "includeTemplates": False,
+            "includeTemplates": True,
             "includeParent": False,
             "includeMeta": False,
             "includeLocation": False,
@@ -162,11 +165,16 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                 f'No assets found matching "{args.query}"' + ("; see fallback_searches for results by word." if fallback else ""),
             )
 
-        # Calculate similarity scores for all assets
+        # Score by asset name and optionally by template name (Exosense "type" – e.g. Fan, Pump)
         assets_with_scores = []
         for asset in assets:
             asset_name = asset.get("name") or "Unnamed Asset"
-            similarity = calculate_similarity(args.query, asset_name)
+            name_sim = calculate_similarity(args.query, asset_name)
+            template = asset.get("template")
+            template_name = (template.get("name") or "").strip() if isinstance(template, dict) else ""
+            template_sim = calculate_similarity(args.query, template_name) if template_name else 0.0
+            # Use best of name or template match so "fan" matches assets with template "Fan" or name "Blast Fan 01"
+            similarity = max(name_sim, template_sim) if template_sim > 0 else name_sim
 
             if similarity >= args.min_similarity:
                 assets_with_scores.append(
@@ -176,6 +184,8 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
                             "name": asset_name,
                             "description": asset.get("description") or "",
                             "locked": asset.get("locked"),
+                            "template_id": template.get("id") if isinstance(template, dict) and template.get("id") else None,
+                            "template_name": template_name or None,
                         },
                         "similarity": similarity,
                     }
@@ -210,19 +220,18 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         matches = []
         for item in assets_with_scores:
             a = item["asset"]
+            base = {"asset_id": a.get("id"), "asset_name": a.get("name") or ""}
+            if a.get("template_name"):
+                base["template_name"] = a["template_name"]
             if compact:
-                matches.append({
-                    "asset_id": a.get("id"),
-                    "asset_name": a.get("name") or "",
-                })
+                matches.append(base)
             else:
-                matches.append({
-                    "asset_id": a.get("id"),
-                    "asset_name": a.get("name") or "",
-                    "description": a.get("description") or "",
-                    "locked": a.get("locked"),
-                    "similarity_score": round(item["similarity"], 3),
-                })
+                base["description"] = a.get("description") or ""
+                base["locked"] = a.get("locked")
+                base["similarity_score"] = round(item["similarity"], 3)
+                if a.get("template_id"):
+                    base["template_id"] = a["template_id"]
+                matches.append(base)
 
         payload = {
             "query": args.query,
@@ -247,6 +256,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(FindAssetParams)
 TOOL_METADATA = {
     "name": "exosense-find-asset",
-    "description": "Find assets by type, category, or name. CALL THIS whenever the user asks about assets, devices, or infrastructure by kind (e.g. 'circulation fans', 'pumps', 'sensors'). Use the asset type/category as the query (e.g. 'circulation fan'). When the full query returns no matches, the tool may return fallback_searches: results for each word separately (e.g. 'circulation' and 'fan') — use those asset_ids to answer the user (e.g. 'No exact match; found N assets for \"circulation\" (Circulation Group 01). Checking their status.') and call exosense-get-asset-statuses with the chosen fallback asset_ids. Returns asset_id, asset_name; then use get-asset-statuses with ALL relevant asset_ids.",
+    "description": "Find assets by type, category, or name. CALL THIS for asset lists, health of specific types, 'how many X are reporting?'. For 'which customer has the most X assets?' or 'which group has the most fans?' use exosense-groups-by-asset-type instead (it returns top-level groups with asset counts). Use query (e.g. 'circulation fan'). When the full query returns no matches, fallback_searches may list results per word — use those and call get-asset-statuses. Returns asset_id, asset_name; then use get-asset-statuses with ALL relevant asset_ids.",
     "inputSchema": schema
 }

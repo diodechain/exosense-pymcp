@@ -51,6 +51,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetHealthSummaryParams)
 TOOL_METADATA = {
     "name": "exosense-asset-health-summary",
-    "description": "Call this for asset counts and overview. Use when the user asks: 'How many assets do I have?', 'How many assets?', 'Asset count', 'Overview', 'Health summary', 'How many are healthy/offline?'. Returns total_assets_checked, assets_healthy, assets_with_issues, assets_offline, problem_categories. Do NOT use exosense-get-asset-details for counts or overview—get-asset-details is only for one specific asset the user named. For listing which assets have issues use exosense-asset-issues-list.",
+    "description": "Call this for asset counts and overview. Use when the user asks: 'How many assets do I have?', 'How many assets?', 'Asset count', 'Overview', 'Health summary', 'How many are healthy/offline?'. Returns total_assets_checked, assets_healthy, assets_with_issues, assets_offline, problem_categories. For 'how many assets reported on [date]?' or 'reported today' use exosense-get-asset-statuses (omit asset_ids, include_details=true) to get last_heard and filter by date. Do NOT use get-asset-details for counts. For listing which assets have issues use exosense-asset-issues-list.",
     "inputSchema": schema,
 }

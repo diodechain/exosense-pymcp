@@ -332,11 +332,11 @@ def get_asset_signals_list(asset_id: str) -> GraphQLQuery:
     )
 
 
-def get_asset_signal_data(asset_id: str, data_limit: int = 5000) -> GraphQLQuery:
-    """Query one asset's signals with time-series data (last N points). API does not support start/end; filter client-side."""
+def get_asset_signal_data(asset_id: str, data_limit: int = 500) -> GraphQLQuery:
+    """Query one asset's signals with time-series data (last N points per signal). Keep limit modest to avoid backend overload (500 per signal)."""
     return GraphQLQuery(
         query=ASSET_SIGNAL_DATA_QUERY,
-        variables={"assetId": asset_id, "dataLimit": min(data_limit, 5000)},
+        variables={"assetId": asset_id, "dataLimit": min(data_limit, 1000)},
         operation_name="getAssetSignalData",
     )
 

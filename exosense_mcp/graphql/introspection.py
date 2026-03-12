@@ -64,3 +64,34 @@ def get_asset_type_schema() -> GraphQLQuery:
         """,
         operation_name="IntrospectAssetType",
     )
+
+
+def get_signal_data_options_schema() -> GraphQLQuery:
+    """Introspect the options type for signal.data() (e.g. PanelMetricOptions) to see if roll-up/interval/start/end exist."""
+    return GraphQLQuery(
+        query="""
+        query IntrospectSignalDataOptions {
+          signal: __type(name: "Signal") {
+            name
+            fields {
+              name
+              args {
+                name
+                type { name kind ofType { name kind } }
+                description
+              }
+            }
+          }
+          panelMetricOptions: __type(name: "PanelMetricOptions") {
+            name
+            kind
+            inputFields {
+              name
+              type { name kind ofType { name kind } }
+              description
+            }
+          }
+        }
+        """,
+        operation_name="IntrospectSignalDataOptions",
+    )

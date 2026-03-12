@@ -9,9 +9,19 @@ from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
+def _normalize_signal_ref(s: Optional[str]) -> str:
+    """Normalize for comparison: strip, collapse unicode dashes/hyphens to ASCII."""
+    if not s:
+        return ""
+    t = (s or "").strip()
+    for c in ("\u2011", "\u2010", "\u2012", "\u2013", "\u2014", "\u2212"):
+        t = t.replace(c, "-")
+    return t
+
+
 class SignalRmsTrendParams(BaseModel):
     asset_id: str = Field(..., description="Asset UUID (required).")
-    signal_id: Optional[str] = Field(None, description="Signal UUID. If omitted, returns list of signals for the user to specify.")
+    signal_id: Optional[str] = Field(None, description="Signal UUID or signal name (e.g. 'Moving Average RMS-X Front'). If omitted, returns list of signals.")
     duration_days: Optional[float] = Field(7.0, ge=0.1, le=365, description="Analysis window in days (default 7). Tell the LLM when defaulted.")
 
 
@@ -98,46 +108,48 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
         end_ts = end.timestamp()
         duration_defaulted = arguments.get("duration_days") in (None, "")
 
-        # One GraphQL call: asset + signals' data in range. Fallback to limit-only if range returns no data.
-        query = get_asset_signal_data(args.asset_id, data_limit=2000, start_ts=start_ts, end_ts=end_ts)
+        # One GraphQL call: API only supports limit (no start/end); we filter by time client-side.
+        query = get_asset_signal_data(args.asset_id, data_limit=5000)
         result = await client.query(query)
         assets = result.get("assets", []) or []
         if not assets:
             return format_success_response(
-                {"asset_id": args.asset_id, "signal_id": args.signal_id, "rms": None, "message": "No asset or no data in range."},
-                "No data for this asset in the requested range.",
+                {"asset_id": args.asset_id, "signal_id": args.signal_id, "rms": None, "message": "No asset or no data."},
+                "No data for this asset.",
             )
         asset = assets[0]
         signals = asset.get("signals") or []
-        signal = next((s for s in signals if s.get("id") == args.signal_id), None)
+        ref = _normalize_signal_ref(args.signal_id)
+        # Match by UUID or by signal name (user may pass "Moving Average RMS-X Front")
+        signal = next(
+            (s for s in signals if s.get("id") == args.signal_id or _normalize_signal_ref(s.get("name")) == ref),
+            None,
+        )
         if not signal:
             sig_list = [{"id": s.get("id"), "name": s.get("name") or ""} for s in signals if s.get("id")]
             return format_success_response(
-                {"asset_id": args.asset_id, "signal_id": args.signal_id, "signals": sig_list, "message": "Signal not found. Use one of the listed signal ids."},
-                "Signal not found; use one of the asset's signal ids.",
+                {"asset_id": args.asset_id, "signal_id": args.signal_id, "signals": sig_list, "message": "Signal not found. Use signal id or exact name from the list."},
+                "Signal not found; use signal id or exact name from the list.",
             )
-        data = signal.get("data") or []
-        # If API didn't honor start/end and returned empty, retry with limit only and filter by time
-        if not data and (start_ts is not None or end_ts is not None):
-            query_fb = get_asset_signal_data(args.asset_id, data_limit=3000, start_ts=None, end_ts=None)
-            result_fb = await client.query(query_fb)
-            assets_fb = result_fb.get("assets", []) or []
-            if assets_fb:
-                sig_fb = next((s for s in (assets_fb[0].get("signals") or []) if s.get("id") == args.signal_id), None)
-                if sig_fb:
-                    raw = sig_fb.get("data") or []
-                    # Keep points within [start_ts, end_ts]
-                    for p in raw:
-                        ts = p.get("timestamp")
-                        if ts is None:
-                            continue
-                        try:
-                            t = float(ts) if isinstance(ts, (int, float)) else datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
-                            if start_ts <= t <= end_ts:
-                                data.append(p)
-                        except (ValueError, TypeError):
-                            pass
-                    data.sort(key=lambda x: (x.get("timestamp") or 0))
+        raw_data = signal.get("data") or []
+        # Filter to requested time window (API has no start/end)
+        data = []
+        for p in raw_data:
+            ts = p.get("timestamp")
+            if ts is None:
+                continue
+            try:
+                if isinstance(ts, (int, float)):
+                    t = float(ts)
+                    if t > 1e12:
+                        t = t / 1000.0  # milliseconds
+                else:
+                    t = datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+                if start_ts <= t <= end_ts:
+                    data.append(p)
+            except (ValueError, TypeError):
+                continue
+        data.sort(key=lambda x: (x.get("timestamp") or 0))
         timestamps = [p.get("timestamp") for p in data]
         values = _numeric_values(data)
         if not values:
@@ -190,6 +202,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(SignalRmsTrendParams)
 TOOL_METADATA = {
     "name": "exosense-signal-rms-trend",
-    "description": "RMS trend and anomalies for an asset signal. Call with asset_id; omit signal_id to get a list of signals to choose from. If duration_days is omitted, defaults to last 7 days (tell the user). Returns: rms, n_points, duration_days, duration_defaulted, and anomalies (if any). Keep responses high-level; call out anomalies explicitly.",
+    "description": "RMS trend and anomalies for an asset signal. Call with asset_id. signal_id can be the signal UUID or the signal name (e.g. 'Moving Average RMS-X Front'); omit to get a list of signals. duration_days defaults to 7 if omitted (tell the user). Returns: rms, n_points, duration_days, duration_defaulted, anomalies. Call out anomalies explicitly.",
     "inputSchema": schema,
 }

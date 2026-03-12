@@ -54,6 +54,8 @@ tools:
   # Full status tool; prefer health-summary or issues-list for common questions
   - file: exosense_mcp/tools/asset_statuses.py
     name: exosense-get-asset-statuses
+  - file: exosense_mcp/tools/signal_rms_trend.py
+    name: exosense-signal-rms-trend
   # - file: exosense_mcp/tools/insight_modules.py
   #   name: exosense-get-insight-modules
   # - file: exosense_mcp/tools/insight_module.py

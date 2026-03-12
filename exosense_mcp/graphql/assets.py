@@ -290,6 +290,68 @@ query getAssetStatuses($ids: [ID]!, $statusLimit: Int = 1) {
 """
 
 
+# Minimal query: one asset, signals id+name only (for listing signals to choose from).
+ASSET_SIGNALS_LIST_QUERY = """
+query getAssetSignalsList($assetId: ID!) {
+  assets(ids: [$assetId], pagination: { limit: 1, offset: 0 }) {
+    id
+    name
+    signals {
+      id
+      name
+    }
+  }
+}
+"""
+
+# One asset, signals with data in time range for RMS computation. Request only timestamp and value.
+# start/end: Unix seconds (Int). Omit for "last N" only.
+ASSET_SIGNAL_DATA_QUERY = """
+query getAssetSignalData($assetId: ID!, $dataLimit: Int!, $start: Int, $end: Int) {
+  assets(ids: [$assetId], pagination: { limit: 1, offset: 0 }) {
+    id
+    name
+    signals {
+      id
+      name
+      data(options: { limit: $dataLimit, start: $start, end: $end }) {
+        timestamp
+        value
+      }
+    }
+  }
+}
+"""
+
+
+def get_asset_signals_list(asset_id: str) -> GraphQLQuery:
+    """Minimal query: asset id, name, and list of signals (id, name) only. Use to list signals for user to pick."""
+    return GraphQLQuery(
+        query=ASSET_SIGNALS_LIST_QUERY,
+        variables={"assetId": asset_id},
+        operation_name="getAssetSignalsList",
+    )
+
+
+def get_asset_signal_data(
+    asset_id: str,
+    data_limit: int = 2000,
+    start_ts: Optional[float] = None,
+    end_ts: Optional[float] = None,
+) -> GraphQLQuery:
+    """Query one asset's signals with time-series data for the given range. Use for RMS/trend. start/end are Unix seconds."""
+    variables: Dict[str, Any] = {"assetId": asset_id, "dataLimit": min(data_limit, 5000)}
+    if start_ts is not None:
+        variables["start"] = int(start_ts)
+    if end_ts is not None:
+        variables["end"] = int(end_ts)
+    return GraphQLQuery(
+        query=ASSET_SIGNAL_DATA_QUERY,
+        variables=variables,
+        operation_name="getAssetSignalData",
+    )
+
+
 def get_asset_statuses(
     ids: List[str],
     options: Optional[Dict[str, Any]] = None,

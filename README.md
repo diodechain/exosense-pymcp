@@ -66,6 +66,7 @@ The server can be configured using environment variables. You can set them in on
 - `EXOSENSE_AUTH_TOKEN`: Default authentication token (optional, required for private mode)
 - `PORT`: Server port (default: `9000`)
 - `HTTP_STREAMING`: Set to `"Private"` for backward compatibility (optional, no longer required for auth mode)
+- `DIODE_JOIN_ADDRESS`: Diode join address for private networks (optional; omit for public publish). Set in `.env` per deployment to avoid config merge conflicts.
 
 ### Hybrid Authentication Mode
 
@@ -183,7 +184,7 @@ You can run the server’s **own Diode client** so the MCP endpoint is reachable
 
 The server will spawn the Diode CLI on startup, create a local client database under **`diode_client/`**, and print the public MCP URL (e.g. `https://<client>.diode.link:9000/mcp`). Use that URL in your MCP client for remote or shared access. The Diode process is stopped automatically when the server exits.
 
-To use a private Diode network instead of public publish, set **`diode_join_address`** in `config.yml` to your join address.
+To use a private Diode network instead of public publish, set **`DIODE_JOIN_ADDRESS`** in your `.env` file (or environment) to your join address. Keeping it in `.env` avoids merge conflicts when deploying to different environments.
 
 ## Development
 

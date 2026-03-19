@@ -54,8 +54,8 @@ def _load_diode_config() -> Dict:
 
 
 def load_diode_join_address() -> str:
-    cfg = _load_diode_config()
-    addr = cfg.get("diode_join_address")
+    """Join address for private Diode networks. Set DIODE_JOIN_ADDRESS in .env (or env) per deployment."""
+    addr = os.getenv("DIODE_JOIN_ADDRESS")
     if addr and isinstance(addr, str) and addr.strip():
         return addr.strip()
     return DEFAULT_JOIN_ADDRESS

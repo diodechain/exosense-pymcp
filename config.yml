@@ -5,8 +5,7 @@
 # No external Diode client needed; this repo runs its own client (data in diode_client/).
 auto-start-diode: true
 
-# Optional: Diode join address for private networks. Omit or leave unset for public publish.
-diode_join_address: "0x5d877ed61ecEc351a40c964516C998FecD458772"
+# Diode join address: set DIODE_JOIN_ADDRESS in .env per deployment (not in config to avoid merge conflicts).
 
 # Optional: first port to try when finding a free port for the Diode API (default 30000).
 # diode_api_port_start: 30000

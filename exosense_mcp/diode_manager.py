@@ -18,6 +18,8 @@ import yaml
 # Default start of range when searching for a free Diode API port (overridable via config)
 DEFAULT_DIODE_API_PORT_START = 30000
 DEFAULT_JOIN_ADDRESS = "0x0000000000000000000000000000000000000000"
+# External port for public publish when no perimeter (no DIODE_JOIN_ADDRESS)
+PUBLIC_EXTERNAL_PORT = 30001
 
 _base_dir = Path(__file__).parent
 _project_root = _base_dir.parent
@@ -124,13 +126,25 @@ def build_diode_command() -> Optional[list]:
     diode_path = find_diode_executable()
     if not diode_path:
         return None
+    join_address = load_diode_join_address()
+    log_path = str(DIODE_LOG_FILE)
+    db_path = str(DIODE_DB_PATH)
+
+    if join_address == DEFAULT_JOIN_ADDRESS:
+        # No perimeter: just run diode publish -public local:30001 (no API server)
+        return [
+            diode_path,
+            f"-dbpath={db_path}",
+            f"-logfilepath={log_path}",
+            "publish",
+            "-public",
+            f"{_publish_port}:{PUBLIC_EXTERNAL_PORT}",
+        ]
+    # Join (perimeter): use API so we can query config and publish state
     is_local = diode_path.endswith("diode") and (
         diode_path == "diode" or Path(diode_path).resolve() == _project_root / "diode"
     )
-    join_address = load_diode_join_address()
     api_addr = f"localhost:{_actual_api_port}"
-    log_path = str(DIODE_LOG_FILE)
-    db_path = str(DIODE_DB_PATH)
     cmd = [
         diode_path,
         "-debug",
@@ -141,15 +155,14 @@ def build_diode_command() -> Optional[list]:
     ]
     if is_local:
         cmd.append("-update=false")
-    if join_address == DEFAULT_JOIN_ADDRESS:
-        cmd.extend(["publish", "-public", f"{_publish_port}:{_publish_port}"])
-    else:
-        cmd.extend(["join", join_address])
+    cmd.extend(["join", join_address])
     return cmd
 
 
 def _fetch_config() -> Optional[Dict]:
     global diode_config_data, diode_client_identity, diode_error
+    if _actual_api_port <= 0:
+        return None  # Public mode runs without API
     if diode_process is None or diode_process.poll() is not None:
         diode_error = "Diode process is not running"
         diode_config_data = None
@@ -273,6 +286,7 @@ def get_diode_connection_status() -> Dict:
         "mode": mode,
         "join_address": join_address if mode == "join" else None,
         "publish_port": _publish_port,
+        "external_port": PUBLIC_EXTERNAL_PORT if mode == "public" else None,
         "pid": diode_process.pid if diode_process and diode_process.poll() is None else None,
         "error": diode_error,
     }
@@ -283,16 +297,19 @@ def print_diode_connection_status() -> None:
     """Print Diode connection status to stdout (for debug output)."""
     s = get_diode_connection_status()
     port_start = get_diode_api_port_start()
+    api_port_note = f" (auto-selected, search from {port_start})" if s.get("api_port") else ""
     print("\n" + "=" * 60, flush=True)
     print("Diode connection status", flush=True)
     print("=" * 60, flush=True)
     print(f"  API URL:            {s['api_url'] or '—'}", flush=True)
-    print(f"  Diode API port:      {s['api_port'] or '—'} (auto-selected, search from {port_start})", flush=True)
+    print(f"  Diode API port:      {s['api_port'] or '—'}{api_port_note}", flush=True)
     print(f"  Client ID:      {s['client_identity'] or '—'}", flush=True)
     print(f"  Mode:           {s['mode']}", flush=True)
     if s.get("join_address"):
         print(f"  Join address:   {s['join_address']}", flush=True)
     print(f"  Publish port:   {s['publish_port']}", flush=True)
+    if s.get("external_port") is not None:
+        print(f"  External port:  {s['external_port']}", flush=True)
     print(f"  Process PID:    {s['pid'] or '—'}", flush=True)
     if s.get("error"):
         print(f"  Error:          {s['error']}", flush=True)
@@ -303,8 +320,13 @@ def start_diode_cli() -> bool:
     """Start Diode CLI publishing the configured port. Returns True if started (or already running)."""
     global diode_process, diode_error, _actual_api_port
 
+    join_address = load_diode_join_address()
+    is_public = join_address == DEFAULT_JOIN_ADDRESS
+
     with _diode_lock:
         if diode_process is not None and diode_process.poll() is None:
+            if is_public:
+                return True
             identity = get_client_identity()
             if identity:
                 return True
@@ -324,14 +346,17 @@ def start_diode_cli() -> bool:
         print(f"⚠ {diode_error}", flush=True)
         return False
 
-    port_start = get_diode_api_port_start()
-    free_port = find_free_port(port_start)
-    if not free_port:
-        diode_error = f"No free port in range starting at {port_start}"
-        print(f"⚠ {diode_error}", flush=True)
-        return False
+    if is_public:
+        _actual_api_port = 0  # No API when using simple publish -public
+    else:
+        port_start = get_diode_api_port_start()
+        free_port = find_free_port(port_start)
+        if not free_port:
+            diode_error = f"No free port in range starting at {port_start}"
+            print(f"⚠ {diode_error}", flush=True)
+            return False
+        _actual_api_port = free_port
 
-    _actual_api_port = free_port
     DIODE_CLIENT_DIR.mkdir(parents=True, exist_ok=True)
     if not DIODE_LOG_FILE.exists():
         try:
@@ -389,6 +414,30 @@ def start_diode_cli() -> bool:
 
         print(f"✓ Diode process started (PID {diode_process.pid})", flush=True)
 
+        if is_public:
+            # No API: just wait for process to stay up a moment
+            time.sleep(2.0)
+            if diode_process.poll() is not None:
+                diode_error = "Diode process exited during startup"
+                stop_tail.set()
+                print("⚠ Diode CLI: process exited during startup.", flush=True)
+                _print_recent_diode_output()
+                diode_process = None
+                return False
+            print(
+                f"✓ Diode CLI: publishing -public {_publish_port}:{PUBLIC_EXTERNAL_PORT}",
+                flush=True,
+            )
+            print(
+                f"  Public URL: https://<client-id>.diode.link:{PUBLIC_EXTERNAL_PORT}/mcp (client ID in diode output above)",
+                flush=True,
+            )
+            print_diode_connection_status()
+            print("=" * 60 + "\n", flush=True)
+            stop_tail.set()
+            return True
+
+        # Join mode: wait for API then for port to be published
         waited = 0.0
         api_ready = False
         while waited < 15:
@@ -430,7 +479,6 @@ def start_diode_cli() -> bool:
                 diode_process = None
             return False
 
-        # Poll API for publish state (perimeter bind); see llm-pipeline-demo
         print("Diode Client auto started, waiting for port to be published...", flush=True)
         publish_ready = False
         published_config = None

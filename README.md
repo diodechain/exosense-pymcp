@@ -67,6 +67,11 @@ The server can be configured using environment variables. You can set them in on
 - `PORT`: Server port (default: `9000`)
 - `HTTP_STREAMING`: Set to `"Private"` for backward compatibility (optional, no longer required for auth mode)
 - `DIODE_JOIN_ADDRESS`: Diode join address for private networks (optional; omit for public publish). Set in `.env` per deployment to avoid config merge conflicts.
+- `DIODE_CLIENT`: Omit or `embedded` (default) — run Diode in this process. Set to **`container`** only when a sidecar publishes Diode (see **Diode** below).
+- `LISTEN_HOST`: Bind address for the HTTP MCP server (default: `127.0.0.1`).
+- `LOG_LEVEL`: Python logging level (default: `INFO`). Use **`WARNING`** in production to cut log I/O overhead.
+
+**Performance:** The server reuses a single **HTTP connection pool** to ExoSense (no new TCP/TLS per GraphQL call). **`GET /health`**, **`POST /mcp`**, and **`/.well-known/mcp-authentication`** are logged at **DEBUG** only so health probes and MCP traffic do not spam **INFO**. JSON-RPC responses use **compact JSON** (no extra whitespace). **`initialize`** avoids copying all headers into a `dict` when authenticating. **`ToolContext`** and **`inspect`** are not recreated on every tool call. For lowest latency on probes, set **`LOG_LEVEL=WARNING`**.
 
 ### Hybrid Authentication Mode
 
@@ -173,18 +178,34 @@ To connect an MCP client to the ExoSense MCP server, configure your client with:
 
 ### Diode (optional – publish MCP over the internet)
 
-You can run the server’s **own Diode client** so the MCP endpoint is reachable over Diode without coordinating an external Diode client.
+You can run the server’s **embedded Diode client** so the MCP endpoint is reachable over Diode without coordinating an external client, **or** run in **container** mode when another process in the stack publishes Diode for you.
 
-1. **Install the Diode CLI** from [https://diode.io/download#cli](https://diode.io/download#cli) so the `diode` binary is on your PATH (or in the project directory).
-2. In **`config.yml`**, set:
-   ```yaml
-   auto-start-diode: true
-   ```
-3. Start the server as usual: `python3 -m exosense_mcp.server`
+1. **Install the Diode CLI** from [https://diode.io/download#cli](https://diode.io/download#cli) so the `diode` binary is on your PATH (or in the project directory). Not required when **`DIODE_CLIENT=container`** if publish is handled elsewhere.
+2. In **`config.yml`**, set **`auto-start-diode: true`** when you want Diode publish enabled (embedded path) or to document intent with container Diode.
+3. **`.env`**: By default the server uses the **embedded** Diode client (no variable needed). Set **`DIODE_CLIENT=container`** only when this process must **not** start Diode and a container/sidecar handles publish. Optional **`DIODE_CLIENT=embedded`** is the same as omitting the variable.
+4. Start the server as usual: `python3 -m exosense_mcp.server`
 
-The server will spawn the Diode CLI on startup, create a local client database under **`diode_client/`**, and print the public MCP URL (e.g. `https://<client>.diode.link:9000/mcp`). Use that URL in your MCP client for remote or shared access. The Diode process is stopped automatically when the server exits.
+With **`auto-start-diode: true`** and embedded mode (default), the server spawns the Diode CLI on startup, creates a local client database under **`diode_client/`**, and prints the public MCP URL (e.g. `https://<client>.diode.link:9000/mcp`). The Diode process is stopped automatically when the server exits.
 
 To use a private Diode network instead of public publish, set **`DIODE_JOIN_ADDRESS`** in your `.env` file (or environment) to your join address. Keeping it in `.env` avoids merge conflicts when deploying to different environments.
+
+### Diode deploy MCP (Cursor)
+
+To deploy packaged releases via Diode’s **`diode_deploy`** tool, add the Diode MCP server with the deploy preset. This repo includes **[`.cursor/mcp.json`](.cursor/mcp.json)**, which passes deploy settings using **Cursor’s env interpolation**: values like **`${env:DIODE_MCP_DEPLOY_TARGET}`** are filled from the **operating-system environment** of the Cursor process—not by reading `.env` automatically.
+
+1. Add **`DIODE_MCP_DEPLOY_TARGET`** and **`DIODE_MCP_DEPLOY_UUID`** to your **`.env`** (see **`.env.example`**) so they stay out of git and match your deployment.
+2. Make sure those variables are **exported into the environment Cursor inherits**, for example:
+   - Launch Cursor from a terminal after: `set -a && source .env && set +a && cursor .` (adjust for your shell), or  
+   - Use **[direnv](https://direnv.net/)** so the project directory exports them when you `cd` into it, or  
+   - Define the same variables in your shell profile / OS user environment.
+
+**Semantics:** **`DIODE_MCP_DEPLOY_TARGET`** is the `diode://…` URL for the deploy files listener. **`DIODE_MCP_DEPLOY_UUID`** is the deploy token; when set, the tool can rename tarballs to `{UUID}.tar.gz` and you can omit `deploy_token` in tool calls (see Diode CLI `docs/mcp-spec.md`).
+
+**Python container:** **`main.py`** at the repo root imports and runs the MCP server (required by the deploy platform). **`deploy.manifest.json`** sets `start_command` to **`python3 main.py`** (avoid `python3 -m …` here — the ingest validator rejects those characters). The server still binds to **`127.0.0.1`** by default. **`requirements.txt`** is installed before start.
+
+**Do not put `.env` in the deploy tarball** — it is too sensitive. Use **`scripts/diode_deploy_bundle.sh`**, which excludes **`.env`**. Anything you rely on locally from **`.env`** (e.g. **`EXOSENSE_API_URL`**, **`EXOSENSE_ORIGIN`**, **`EXOSENSE_AUTH_TOKEN`**, **`PORT`**, **`DIODE_CLIENT`**, **`LISTEN_HOST`**, **`DIODE_JOIN_ADDRESS`**, **`LOG_LEVEL`**, **`HTTP_STREAMING`**) must be **configured on the Diode Deploy project** so the running container receives the same variables as process environment. See **`.env.example`** for the full list of knobs; mirror those into the deploy UI or project env settings.
+
+Adjust **`command`** in **`mcp.json`** if your Diode binary is not at `/Users/hr/opt/diode/diode` (e.g. `"diode"` when it is on `PATH`).
 
 ## Development
 

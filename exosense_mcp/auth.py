@@ -1,10 +1,11 @@
 """Authentication handler for MCP server"""
 
-from typing import Dict, Any
+from typing import Any, Dict, Mapping
+
 from .types.auth import ExoSenseAuth, TokenAuth, OAuthAuth
 
 
-async def authenticate(request_headers: Dict[str, Any]) -> Dict[str, ExoSenseAuth]:
+async def authenticate(request_headers: Mapping[str, Any]) -> Dict[str, ExoSenseAuth]:
     """
     Authentication handler for MCP server
     

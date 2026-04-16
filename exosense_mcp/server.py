@@ -3,6 +3,7 @@ MCP Server implementation for ExoSense using aiohttp.
 Compatible with Python 3.9+.
 """
 import atexit
+import inspect
 import json
 import uuid
 import importlib.util
@@ -45,11 +46,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+def _dumps(obj: Any) -> str:
+    """Compact JSON for MCP/JSON-RPC responses (faster, smaller than default spacing)."""
+    return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _mcp_session_id(request: Request) -> Optional[str]:
+    """Session header (aiohttp headers are case-insensitive; one lookup per variant for odd clients)."""
+    h = request.headers
+    return h.get("Mcp-Session-Id") or h.get("mcp-session-id") or h.get("MCP-Session-Id")
+
+
+class ToolContext:
+    """Passed to tool execute functions; module-level to avoid per-request class creation."""
+
+    __slots__ = ("session", "log", "report_progress")
+
+    def __init__(self, session_auth: Optional[Any]) -> None:
+        self.session = {"authorization": session_auth} if session_auth else None
+        self.log = logger
+        self.report_progress = lambda _p: None  # placeholder for MCP progress
+
+
 # Environment variable configuration
 EXOSENSE_API_URL = os.getenv("EXOSENSE_API_URL", "https://api.exosense.com")
 EXOSENSE_AUTH_TOKEN = os.getenv("EXOSENSE_AUTH_TOKEN")
 EXOSENSE_ORIGIN = os.getenv("EXOSENSE_ORIGIN", "https://exosense.com")
 PORT = int(os.getenv("PORT", "9000"))
+LISTEN_HOST = os.getenv("LISTEN_HOST", "127.0.0.1")
 HTTP_STREAMING = os.getenv("HTTP_STREAMING")
 
 # Session storage (in production, use a proper session store)
@@ -61,6 +86,17 @@ TOOL_FUNCTIONS: Dict[str, Callable] = {}
 
 # Global ExoSense client instance
 _exosense_client: Optional[ExoSenseClient] = None
+
+
+def _dispose_exosense_client(prev: Optional[ExoSenseClient]) -> None:
+    """Schedule async close of replaced client (connection pool cleanup)."""
+    if prev is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(prev.aclose())
+    except RuntimeError:
+        pass
 
 
 def get_exosense_client(auth: Optional[ExoSenseAuth] = None) -> ExoSenseClient:
@@ -90,6 +126,8 @@ def get_exosense_client(auth: Optional[ExoSenseAuth] = None) -> ExoSenseClient:
             # Use .env API URL
             graphql_endpoint = EXOSENSE_API_URL
 
+        if _exosense_client is not None:
+            _dispose_exosense_client(_exosense_client)
         _exosense_client = ExoSenseClient(
             ExoSenseConfig(
                 graphql_endpoint=graphql_endpoint,
@@ -118,6 +156,20 @@ def load_config(config_path: str = "config.yml") -> Dict[str, Any]:
     logger.debug(f"Loading config from: {config_file}")
     with open(config_file, 'r') as f:
         return yaml.safe_load(f)
+
+
+def resolve_diode_client_mode() -> str:
+    """
+    Defaults to embedded Diode (this process manages diode_client/). Only when
+    DIODE_CLIENT=container do we skip starting Diode and rely on a sidecar/image.
+    Unset, empty, or embedded → embedded; unknown values log a warning and use embedded.
+    """
+    raw = (os.getenv("DIODE_CLIENT") or "").strip().lower()
+    if raw == "container":
+        return "container"
+    if raw and raw != "embedded":
+        logger.warning("Unknown DIODE_CLIENT %r; using embedded", os.getenv("DIODE_CLIENT"))
+    return "embedded"
 
 
 def load_tool_module(tool_file: str) -> tuple:
@@ -441,7 +493,8 @@ async def handle_initialize(request: Request) -> Response:
         params = data.get("params", {})
         
         logger.debug(f"🔧 Initialize request - ID: {request_id}")
-        logger.debug(f"   Params: {json.dumps(params, indent=2)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("   Params: %s", _dumps(params))
         
         # Generate session ID
         session_id = str(uuid.uuid4())
@@ -454,9 +507,8 @@ async def handle_initialize(request: Request) -> Response:
         # First, try to get auth from headers (client-provided, multi-tenant style)
         logger.debug("   Attempting to extract auth from headers")
         try:
-            request_headers = dict(request.headers)
-            logger.debug(f"   Request headers: {list(request_headers.keys())}")
-            auth_result = await authenticate(request_headers)
+            logger.debug("   Request header keys: %s", list(request.headers.keys()))
+            auth_result = await authenticate(request.headers)
             if auth_result and "authorization" in auth_result:
                 auth = auth_result["authorization"]
                 # Log if origin is missing - will use .env fallback
@@ -536,14 +588,14 @@ async def handle_initialize(request: Request) -> Response:
         response_data = create_jsonrpc_response(request_id, result)
         
         return web.Response(
-            text=json.dumps(response_data),
+            text=_dumps(response_data),
             content_type="application/json",
             headers={"Mcp-Session-Id": session_id}
         )
     except Exception as e:
         logger.error(f"Error in initialize: {e}", exc_info=True)
         return web.Response(
-            text=json.dumps(create_jsonrpc_response(
+            text=_dumps(create_jsonrpc_response(
                 data.get("id") if 'data' in locals() else None,
                 error={"code": -32603, "message": f"Internal error: {str(e)}"}
             )),
@@ -557,10 +609,11 @@ async def handle_tools_list(request: Request) -> Response:
     try:
         data = await request.json()
         request_id = data.get("id")
-        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or request.headers.get("MCP-Session-Id")
-        
+        session_id = _mcp_session_id(request)
+
         logger.debug(f"📋 Tools/list request - ID: {request_id}, Session: {session_id}")
-        logger.debug(f"   All headers: {dict(request.headers)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("   All headers: %s", dict(request.headers))
         logger.debug(f"   Tools available: {len(TOOLS)}")
         
         # Verify session
@@ -568,7 +621,7 @@ async def handle_tools_list(request: Request) -> Response:
             logger.warning(f"   ❌ Invalid or missing session: {session_id}")
             logger.debug(f"   Active sessions: {list(sessions.keys())}")
             return web.Response(
-                text=json.dumps(create_jsonrpc_response(
+                text=_dumps(create_jsonrpc_response(
                     request_id,
                     error={
                         "code": -32000,
@@ -589,14 +642,14 @@ async def handle_tools_list(request: Request) -> Response:
         response_data = create_jsonrpc_response(request_id, result)
         
         return web.Response(
-            text=json.dumps(response_data),
+            text=_dumps(response_data),
             content_type="application/json",
             headers={"Mcp-Session-Id": session_id}
         )
     except Exception as e:
         logger.error(f"Error in tools/list: {e}", exc_info=True)
         return web.Response(
-            text=json.dumps(create_jsonrpc_response(
+            text=_dumps(create_jsonrpc_response(
                 data.get("id") if 'data' in locals() else None,
                 error={"code": -32603, "message": f"Internal error: {str(e)}"}
             )),
@@ -612,12 +665,12 @@ async def handle_tools_call(request: Request) -> Response:
         request_id = data.get("id")
         params = data.get("params", {})
         
-        session_id = request.headers.get("Mcp-Session-Id") or request.headers.get("mcp-session-id") or request.headers.get("MCP-Session-Id")
+        session_id = _mcp_session_id(request)
         
         # Verify session
         if not session_id:
             return web.Response(
-                text=json.dumps(create_jsonrpc_response(
+                text=_dumps(create_jsonrpc_response(
                     request_id,
                     error={
                         "code": -32000,
@@ -630,7 +683,7 @@ async def handle_tools_call(request: Request) -> Response:
         
         if session_id not in sessions:
             return web.Response(
-                text=json.dumps(create_jsonrpc_response(
+                text=_dumps(create_jsonrpc_response(
                     request_id,
                     error={
                         "code": -32000,
@@ -644,12 +697,13 @@ async def handle_tools_call(request: Request) -> Response:
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
         
-        logger.info(f"Tool call: {tool_name} with args: {arguments}")
+        logger.info("Tool call: %s", tool_name)
+        logger.debug("Tool args: %s", arguments)
         
         # Check if tool exists
         if tool_name not in TOOL_FUNCTIONS:
             return web.Response(
-                text=json.dumps(create_jsonrpc_response(
+                text=_dumps(create_jsonrpc_response(
                     request_id,
                     error={"code": -32601, "message": f"Unknown tool: {tool_name}"}
                 )),
@@ -668,7 +722,7 @@ async def handle_tools_call(request: Request) -> Response:
             missing_params = [param for param in required_params if param not in arguments]
             if missing_params:
                 return web.Response(
-                    text=json.dumps(create_jsonrpc_response(
+                    text=_dumps(create_jsonrpc_response(
                         request_id,
                         error={
                             "code": -32602,
@@ -693,19 +747,10 @@ async def handle_tools_call(request: Request) -> Response:
                 origin=EXOSENSE_ORIGIN,
             )
         
-        # Create a context object for tools (similar to ToolContext)
-        class ToolContext:
-            def __init__(self, session_auth):
-                self.session = {"authorization": session_auth} if session_auth else None
-                self.log = logger
-                self.report_progress = lambda progress: None  # Placeholder
-        
         context = ToolContext(auth)
         
         # Execute the tool
         try:
-            # Check if execute function is async
-            import inspect
             if inspect.iscoroutinefunction(execute_func):
                 result_data = await execute_func(arguments, context)
             else:
@@ -716,7 +761,7 @@ async def handle_tools_call(request: Request) -> Response:
                 # Already in MCP format
                 content = result_data["content"]
             elif isinstance(result_data, (dict, list)):
-                result_text = json.dumps(result_data, indent=2)
+                result_text = _dumps(result_data)
                 content = create_text_content(result_text)
             else:
                 result_text = str(result_data)
@@ -731,7 +776,7 @@ async def handle_tools_call(request: Request) -> Response:
                 error={"code": -32603, "message": f"Tool execution error: {str(e)}"}
             )
             return web.Response(
-                text=json.dumps(error_response),
+                text=_dumps(error_response),
                 content_type="application/json",
                 status=500
             )
@@ -739,14 +784,14 @@ async def handle_tools_call(request: Request) -> Response:
         response_data = create_jsonrpc_response(request_id, result)
         
         return web.Response(
-            text=json.dumps(response_data),
+            text=_dumps(response_data),
             content_type="application/json",
             headers={"Mcp-Session-Id": session_id}
         )
     except Exception as e:
         logger.error(f"Error in tools/call: {e}", exc_info=True)
         return web.Response(
-            text=json.dumps(create_jsonrpc_response(
+            text=_dumps(create_jsonrpc_response(
                 data.get("id") if 'data' in locals() else None,
                 error={"code": -32603, "message": f"Internal error: {str(e)}"}
             )),
@@ -760,7 +805,7 @@ async def cors_middleware(request: Request, handler):
     """Middleware to add CORS headers to all responses."""
     # Handle OPTIONS preflight requests
     if request.method == "OPTIONS":
-        logger.info("🔍 OPTIONS request (CORS preflight)")
+        logger.debug("OPTIONS request (CORS preflight)")
         return web.Response(
             headers={
                 "Access-Control-Allow-Origin": "*",
@@ -780,34 +825,35 @@ async def cors_middleware(request: Request, handler):
 
 @web.middleware
 async def logging_middleware(request: Request, handler):
-    """Middleware to log all incoming requests."""
-    # Only log routine operations at DEBUG level
-    is_routine = request.path_qs == "/mcp" and request.method == "POST"
-    
-    if is_routine:
-        logger.debug(f"📥 Request: {request.method} {request.path_qs}")
+    """Middleware to log incoming requests. Hot paths (MCP, health) stay at DEBUG to avoid I/O overhead."""
+    path = request.path
+    is_lightweight = (
+        (request.method == "POST" and path == "/mcp")
+        or (request.method == "GET" and path in ("/health", "/", "/.well-known/mcp-authentication"))
+    )
+
+    if is_lightweight:
+        logger.debug(f"📥 {request.method} {path}")
     else:
         logger.info("=" * 80)
         logger.info(f"📥 INCOMING REQUEST: {request.method} {request.path_qs}")
         logger.info(f"   Remote: {request.remote}")
         logger.info(f"   URL: {request.url}")
         logger.debug(f"   Headers: {dict(request.headers)}")
-    
-    # Process request
+
     try:
         response = await handler(request)
-        if is_routine:
-            logger.debug(f"📤 Response: {response.status}")
+        if is_lightweight:
+            logger.debug(f"📤 {response.status} {path}")
         else:
             logger.info(f"📤 RESPONSE: Status {response.status}")
             if response.headers:
                 logger.debug(f"   Response Headers: {dict(response.headers)}")
-        if not is_routine:
             logger.info("=" * 80)
         return response
     except Exception as e:
         logger.error(f"❌ ERROR in handler: {e}", exc_info=True)
-        if not is_routine:
+        if not is_lightweight:
             logger.info("=" * 80)
         raise
 
@@ -825,7 +871,8 @@ async def handle_mcp_request(request: Request) -> Response:
             logger.debug(f"🔍 Processing MCP request: method={method}, id={request_id}")
         else:
             logger.info(f"🔍 Processing MCP request: method={method}, id={request_id}")
-            logger.debug(f"   Full request data: {json.dumps(data, indent=2)}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("   Full request data: %s", _dumps(data))
         
         if method == "initialize":
             logger.debug("   → Routing to initialize handler")
@@ -834,12 +881,12 @@ async def handle_mcp_request(request: Request) -> Response:
             logger.debug("   → Routing to tools/list handler")
             return await handle_tools_list(request)
         elif method == "tools/call":
-            logger.info("   → Routing to tools/call handler")
+            logger.debug("   → Routing to tools/call handler")
             return await handle_tools_call(request)
         else:
             logger.warning(f"   ⚠️  Unknown method: {method}")
             return web.Response(
-                text=json.dumps(create_jsonrpc_response(
+                text=_dumps(create_jsonrpc_response(
                     request_id,
                     error={"code": -32601, "message": f"Method not found: {method}"}
                 )),
@@ -849,7 +896,7 @@ async def handle_mcp_request(request: Request) -> Response:
     except json.JSONDecodeError as e:
         logger.error(f"❌ JSON decode error: {e}")
         return web.Response(
-            text=json.dumps(create_jsonrpc_response(
+            text=_dumps(create_jsonrpc_response(
                 None,
                 error={"code": -32700, "message": "Parse error"}
             )),
@@ -859,7 +906,7 @@ async def handle_mcp_request(request: Request) -> Response:
     except Exception as e:
         logger.error(f"❌ Error in handle_mcp_request: {e}", exc_info=True)
         return web.Response(
-            text=json.dumps(create_jsonrpc_response(
+            text=_dumps(create_jsonrpc_response(
                 None,
                 error={"code": -32603, "message": f"Internal error: {str(e)}"}
             )),
@@ -868,11 +915,19 @@ async def handle_mcp_request(request: Request) -> Response:
         )
 
 
+async def _cleanup_exosense_http(app: web.Application) -> None:
+    global _exosense_client
+    if _exosense_client is not None:
+        await _exosense_client.aclose()
+        _exosense_client = None
+
+
 def create_app() -> web.Application:
     """Create the aiohttp application."""
     # Middlewares are applied in reverse order
     # Disable aiohttp's built-in access logger to reduce verbosity
     app = web.Application(middlewares=[logging_middleware, cors_middleware])
+    app.on_cleanup.append(_cleanup_exosense_http)
     # Disable aiohttp access logger
     aiohttp_access_logger = logging.getLogger("aiohttp.access")
     aiohttp_access_logger.setLevel(logging.WARNING)  # Only show warnings/errors
@@ -880,9 +935,9 @@ def create_app() -> web.Application:
     
     # Add a simple health check endpoint
     async def health_check(request: Request) -> Response:
-        logger.info("🏥 Health check requested")
+        logger.debug("🏥 Health check")
         return web.Response(
-            text=json.dumps({
+            text=_dumps({
                 "status": "ok",
                 "tools_loaded": len(TOOLS),
                 "sessions_active": len(sessions)
@@ -945,7 +1000,7 @@ def create_app() -> web.Application:
         }
         
         return web.Response(
-            text=json.dumps(auth_metadata, indent=2),
+            text=_dumps(auth_metadata),
             content_type="application/json"
         )
     
@@ -1019,11 +1074,21 @@ def main():
     if os.getenv("HOT_RELOAD", "true").lower() in ("true", "1", "yes"):
         observer = start_file_watcher()
 
-    # Optional: auto-launch Diode CLI to publish MCP over Diode (no external client needed)
+    # Optional: auto-launch Diode CLI to publish MCP over Diode (embedded), or rely on container Diode
     diode_started = False
     config = load_config()
     auto_start_diode = config.get("auto-start-diode", False)
-    if auto_start_diode:
+    diode_client_mode = resolve_diode_client_mode()
+    if auto_start_diode and diode_client_mode == "container":
+        logger.info(
+            "Diode: DIODE_CLIENT=container — not starting embedded Diode CLI "
+            "(publish via container/sidecar; set auto-start-diode false if unused)"
+        )
+        print(
+            "   Diode: DIODE_CLIENT=container (embedded Diode not started)",
+            file=sys.stderr,
+        )
+    elif auto_start_diode:
         try:
             from exosense_mcp.diode_manager import set_publish_port, start_diode_cli, cleanup_diode
             set_publish_port(PORT)
@@ -1039,10 +1104,10 @@ def main():
     logger.info("=" * 80)
     logger.info("🚀 STARTING EXOSENSE MCP SERVER")
     logger.info("=" * 80)
-    logger.info(f"📍 Server URL: http://127.0.0.1:{PORT}/mcp")
-    logger.info(f"📍 Health check: http://127.0.0.1:{PORT}/health")
-    logger.info(f"📍 Auth discovery: http://127.0.0.1:{PORT}/.well-known/mcp-authentication")
-    logger.info(f"📍 Auth discovery: http://127.0.0.1:{PORT}/.well-known/mcp-authentication")
+    logger.info(f"📍 Server URL: http://{LISTEN_HOST}:{PORT}/mcp")
+    logger.info(f"📍 Health check: http://{LISTEN_HOST}:{PORT}/health")
+    logger.info(f"📍 Auth discovery: http://{LISTEN_HOST}:{PORT}/.well-known/mcp-authentication")
+    logger.info(f"📍 Auth discovery: http://{LISTEN_HOST}:{PORT}/.well-known/mcp-authentication")
     logger.info(f"🔧 Tools loaded: {len(TOOLS)}")
     if TOOLS:
         logger.info(f"   Tool names: {', '.join(TOOLS.keys())}")
@@ -1066,7 +1131,7 @@ def main():
         print(f"   Hot-reload: ENABLED", file=sys.stderr)
     
     try:
-        web.run_app(app, host="127.0.0.1", port=PORT)
+        web.run_app(app, host=LISTEN_HOST, port=PORT)
     except KeyboardInterrupt:
         logger.info("🛑 Shutting down server...")
     finally:

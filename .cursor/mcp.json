@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "diode-deploy": {
+      "command": "/Users/hr/opt/diode/diode",
+      "args": ["mcp", "-mcp-preset=deploy"],
+      "env": {
+        "DIODE_MCP_DEPLOY_TARGET": "${env:DIODE_MCP_DEPLOY_TARGET}",
+        "DIODE_MCP_DEPLOY_UUID": "${env:DIODE_MCP_DEPLOY_UUID}"
+      }
+    }
+  }
+}

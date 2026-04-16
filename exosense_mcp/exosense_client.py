@@ -39,6 +39,16 @@ class ExoSenseClient:
         self.auth = config.auth
         self.graphql_endpoint = config.graphql_endpoint
         self.timeout = config.timeout or 30000
+        timeout_sec = self.timeout / 1000.0
+        # Reuse one client for connection pooling (avoid new TCP/TLS per GraphQL call).
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout_sec),
+            limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
+        )
+
+    async def aclose(self) -> None:
+        """Close the HTTP client (call on shutdown or before replacing the client)."""
+        await self._http.aclose()
 
     def _get_auth_headers(self) -> Dict[str, str]:
         """Get authentication headers based on auth type"""
@@ -72,23 +82,22 @@ class ExoSenseClient:
             payload["operationName"] = query.operation_name
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout / 1000) as client:
-                response = await client.post(
-                    self.graphql_endpoint,
-                    json=payload,
-                    headers=headers,
-                )
-                response.raise_for_status()
-                
-                result_data = response.json()
-                result = GraphQLResponse(**result_data)
+            response = await self._http.post(
+                self.graphql_endpoint,
+                json=payload,
+                headers=headers,
+            )
+            response.raise_for_status()
 
-                # Handle GraphQL errors
-                if result.errors:
-                    error_messages = ", ".join(err.message for err in result.errors)
-                    raise ValueError(f"GraphQL Error: {error_messages}")
+            result_data = response.json()
+            result = GraphQLResponse(**result_data)
 
-                return result
+            # Handle GraphQL errors
+            if result.errors:
+                error_messages = ", ".join(err.message for err in result.errors)
+                raise ValueError(f"GraphQL Error: {error_messages}")
+
+            return result
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 401:
                 raise ValueError("Authentication failed - check your credentials") from e

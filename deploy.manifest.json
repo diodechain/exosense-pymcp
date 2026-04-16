@@ -1,0 +1,4 @@
+{
+  "format": "deploy.container_manifest.v1",
+  "start_command": "python3 main.py"
+}

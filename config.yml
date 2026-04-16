@@ -5,6 +5,8 @@
 # No external Diode client needed; this repo runs its own client (data in diode_client/).
 auto-start-diode: true
 
+# Diode: default embedded. Set DIODE_CLIENT=container in .env only for sidecar publish — not here.
+
 # Diode join address: set DIODE_JOIN_ADDRESS in .env per deployment (not in config to avoid merge conflicts).
 
 # Optional: first port to try when finding a free port for the Diode API (default 30000).

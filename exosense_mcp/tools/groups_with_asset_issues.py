@@ -1,7 +1,7 @@
 """Find which groups/customers have assets with issues (e.g. connectivity). Use for 'which customers have connectivity problems?'."""
 
-from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field, ValidationError
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from ..graphql.groups import get_groups_with_asset_ids
 from ..types.graphql import Pagination
 from .types import ToolContext
@@ -24,6 +24,20 @@ class GroupsWithAssetIssuesParams(BaseModel):
     )
     max_groups: int = Field(500, ge=1, le=1000, description="Max groups to load for hierarchy (default 500, omit for default)")
     max_assets: int = Field(100, ge=1, le=500, description="Max assets to check status (default 100, omit for default)")
+
+    @field_validator("max_groups", mode="before")
+    @classmethod
+    def _max_groups_default_if_null(cls, v: Union[int, None]) -> int:
+        if v is None:
+            return 500
+        return v
+
+    @field_validator("max_assets", mode="before")
+    @classmethod
+    def _max_assets_default_if_null(cls, v: Union[int, None]) -> int:
+        if v is None:
+            return 100
+        return v
 
 
 def _build_asset_to_group_and_paths(groups: List[Dict]) -> tuple:

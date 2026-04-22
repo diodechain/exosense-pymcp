@@ -1,9 +1,10 @@
 """Find which groups/customers have assets with issues (e.g. connectivity). Use for 'which customers have connectivity problems?'."""
 
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from typing import Any, Dict, List, Optional
+from pydantic import Field, ValidationError, field_validator
 from ..graphql.groups import get_groups_with_asset_ids
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, path_from_root_for_group
 from . import asset_statuses
@@ -13,7 +14,7 @@ from . import asset_statuses
 CONNECTIVITY_CATEGORIES = frozenset({"timeout", "offline"})
 
 
-class GroupsWithAssetIssuesParams(BaseModel):
+class GroupsWithAssetIssuesParams(McpToolParams):
     issue_type: str = Field(
         "connectivity",
         description="'connectivity' = offline + timeout only; 'all' = any issue. Use 'connectivity' for 'which customers have connectivity problems?'.",
@@ -25,18 +26,11 @@ class GroupsWithAssetIssuesParams(BaseModel):
     max_groups: int = Field(500, ge=1, le=1000, description="Max groups to load for hierarchy (default 500, omit for default)")
     max_assets: int = Field(100, ge=1, le=500, description="Max assets to check status (default 100, omit for default)")
 
-    @field_validator("max_groups", mode="before")
+    @field_validator("issue_type", mode="before")
     @classmethod
-    def _max_groups_default_if_null(cls, v: Union[int, None]) -> int:
-        if v is None:
-            return 500
-        return v
-
-    @field_validator("max_assets", mode="before")
-    @classmethod
-    def _max_assets_default_if_null(cls, v: Union[int, None]) -> int:
-        if v is None:
-            return 100
+    def _blank_issue_type_to_default(cls, v: Any) -> Any:
+        if v is not None and isinstance(v, str) and not v.strip():
+            return "connectivity"
         return v
 
 

@@ -1,17 +1,18 @@
 """Get group hierarchy (tree). Use for structure, tree, or 'groups and their children'."""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 import re
 from ..graphql.groups import get_groups_tree
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, group_children_to_structured, path_from_root_for_group
 
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
-class GroupTreeParams(BaseModel):
+class GroupTreeParams(McpToolParams):
     group_id: Optional[str] = Field(None, description="Root of tree (UUID). Omit for full tree from root.")
     limit: int = Field(100, ge=1, le=200, description="Max groups to return (default 100)")
 

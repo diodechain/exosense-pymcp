@@ -2,13 +2,14 @@
 
 import json
 from typing import Dict, Any
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from ..graphql.groups import get_root_group_id
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class RootGroupParams(BaseModel):
+class RootGroupParams(McpToolParams):
     """Parameters for root group tool"""
     pass
 

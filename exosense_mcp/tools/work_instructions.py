@@ -1,14 +1,15 @@
 """Get work instructions"""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.work_instructions import get_work_instructions
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class WorkInstructionsParams(BaseModel):
+class WorkInstructionsParams(McpToolParams):
     """Parameters for work instructions tool"""
 
     filters: Optional[Dict] = Field(None, description="Filters to apply to the query")

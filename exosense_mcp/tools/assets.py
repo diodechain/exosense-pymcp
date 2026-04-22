@@ -2,9 +2,10 @@
 
 import re
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, field_validator, ValidationError
+from pydantic import Field, field_validator, ValidationError
 from ..graphql.assets import get_assets
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
@@ -14,7 +15,7 @@ UUID_REGEX = re.compile(
 )
 
 
-class AssetsParams(BaseModel):
+class AssetsParams(McpToolParams):
     """Parameters for assets tool"""
 
     group_id: Optional[str] = Field(None, description="Find assets belonging to a specific group")

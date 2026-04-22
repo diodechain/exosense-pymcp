@@ -1,17 +1,18 @@
 """Asset count for one group by name or ID. One call for 'how many assets does [group] have?'."""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 import re
 from ..graphql.groups import get_groups_list, get_group_totals_recursive
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
-class GroupAssetCountParams(BaseModel):
+class GroupAssetCountParams(McpToolParams):
     group_name: Optional[str] = Field(None, description="Group name to search (e.g. 'Mahr Brothers'). Use for 'how many assets does X have?'.")
     group_id: Optional[str] = Field(None, description="Group UUID if already known. Omit if using group_name.")
 

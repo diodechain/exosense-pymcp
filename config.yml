@@ -1,8 +1,5 @@
-# MCP Server Configuration
-# Lists all available tools and their file locations
-
-# Optional: set to true to auto-launch the Diode CLI and publish MCP at https://<client>.diode.link:PORT/mcp
-# No external Diode client needed; this repo runs its own client (data in diode_client/).
+# exosense-pymcp: lists enabled MCP tools. Put secrets and DIODE_* in .env (see README).
+# auto-start runs the embedded Diode client (see exosense_mcp/diode_manager). Optional API port: diode_api_port_start.
 auto-start-diode: true
 
 # Diode: default embedded. Set DIODE_CLIENT=container in .env only for sidecar publish — not here.

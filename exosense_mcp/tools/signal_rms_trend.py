@@ -3,8 +3,9 @@
 import math
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.assets import get_asset_signals_list, get_asset_signal_data
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
@@ -19,7 +20,7 @@ def _normalize_signal_ref(s: Optional[str]) -> str:
     return t
 
 
-class SignalRmsTrendParams(BaseModel):
+class SignalRmsTrendParams(McpToolParams):
     asset_id: str = Field(..., description="Asset UUID (required).")
     signal_id: Optional[str] = Field(None, description="Signal UUID or signal name (e.g. 'Moving Average RMS-X Front'). If omitted, returns list of signals.")
     duration_days: Optional[float] = Field(7.0, ge=0.1, le=365, description="Analysis window in days (default 7). Tell the LLM when defaulted.")

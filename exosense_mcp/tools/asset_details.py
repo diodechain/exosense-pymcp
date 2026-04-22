@@ -2,8 +2,9 @@
 
 import re
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, model_validator, ValidationError
+from pydantic import Field, model_validator, ValidationError
 from ..graphql.assets import get_asset_details
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
@@ -12,7 +13,7 @@ UUID_REGEX = re.compile(
 )
 
 
-class AssetDetailsParams(BaseModel):
+class AssetDetailsParams(McpToolParams):
     """Parameters for asset details tool"""
 
     asset_id: Optional[str] = Field(

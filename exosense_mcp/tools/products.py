@@ -1,13 +1,14 @@
 """Get all IoT Connectors (products) from ExoSense"""
 
 from typing import Dict, Any
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from ..graphql.devices_products import get_all_products
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class ProductsParams(BaseModel):
+class ProductsParams(McpToolParams):
     """Parameters for products tool"""
     pass
 

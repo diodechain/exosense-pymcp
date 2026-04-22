@@ -1,22 +1,15 @@
 """Asset health summary only (counts). Use for 'How many assets?', 'Overview', 'Health summary'."""
 
-from typing import Any, Dict, Union
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from typing import Any, Dict
+from pydantic import Field, ValidationError
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 from . import asset_statuses
 
 
-class AssetHealthSummaryParams(BaseModel):
+class AssetHealthSummaryParams(McpToolParams):
     max_assets: int = Field(100, ge=1, le=500, description="Max assets to check (default 100)")
-
-    @field_validator("max_assets", mode="before")
-    @classmethod
-    def _max_assets_default_if_null(cls, v: Union[int, None]) -> int:
-        # MCP clients may send null for omitted/optional tool args
-        if v is None:
-            return 100
-        return v
 
 
 async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, Any]:

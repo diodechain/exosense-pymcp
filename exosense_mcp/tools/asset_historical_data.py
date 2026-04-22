@@ -3,20 +3,21 @@
 import asyncio
 from datetime import datetime
 from typing import List, Dict, Any
-from pydantic import BaseModel, Field, field_validator, model_validator, ValidationError
+from pydantic import Field, field_validator, model_validator, ValidationError
 from ..graphql.reports import create_report, get_report_status, get_report_content
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class SignalInput(BaseModel):
+class SignalInput(McpToolParams):
     """Signal input for historical data"""
 
     id: str
     name: str
 
 
-class AssetHistoricalDataParams(BaseModel):
+class AssetHistoricalDataParams(McpToolParams):
     """Parameters for asset historical data tool"""
 
     asset_name: str = Field(..., description="Name of the asset to generate historical data report for")

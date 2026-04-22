@@ -2,9 +2,10 @@
 
 import re
 from typing import Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.groups import get_groups_list
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, path_from_root_for_group
 
@@ -14,7 +15,7 @@ MAX_GROUPS_TO_FETCH = 1000
 PAGE_SIZE = 200
 
 
-class GroupPathParams(BaseModel):
+class GroupPathParams(McpToolParams):
     group_id: str = Field(..., description="Group UUID to get hierarchy path for (e.g. from list-groups or group-tree)")
 
 

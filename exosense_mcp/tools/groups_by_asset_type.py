@@ -1,10 +1,11 @@
 """Find top-level groups (customers) that have assets of a given type, with counts. Use for 'which customer has the most fan-related assets?'."""
 
 from typing import Dict, Any, List, Optional
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.assets import get_assets
 from ..graphql.groups import get_groups_with_asset_ids
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import (
     pydantic_to_json_schema,
@@ -15,7 +16,7 @@ from ._helpers import (
 from .find_asset import calculate_similarity
 
 
-class GroupsByAssetTypeParams(BaseModel):
+class GroupsByAssetTypeParams(McpToolParams):
     query: str = Field(
         ...,
         min_length=1,

@@ -154,8 +154,21 @@ def load_config(config_path: str = "config.yml") -> Dict[str, Any]:
             return {"tools": []}
     
     logger.debug(f"Loading config from: {config_file}")
-    with open(config_file, 'r') as f:
-        return yaml.safe_load(f)
+    try:
+        with open(config_file, "r", encoding="utf-8-sig") as f:
+            raw = f.read()
+    except OSError as e:
+        raise OSError(f"Cannot read config: {config_file}: {e}") from e
+    try:
+        config = yaml.safe_load(raw)
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        where = f" (line {mark.line + 1} column {mark.column + 1})" if mark is not None else ""
+        msg = f"Invalid YAML in {config_file}{where}: {e!s}. Re-copy from the repo or fix the file (tabs, merge conflicts, or text without a leading # on a comment line)."
+        raise ValueError(msg) from e
+    if config is None:
+        return {"tools": []}
+    return config
 
 
 def resolve_diode_client_mode() -> str:

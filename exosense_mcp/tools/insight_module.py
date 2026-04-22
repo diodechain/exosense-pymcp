@@ -1,13 +1,14 @@
 """Get detailed information about a specific insight module"""
 
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.insight_modules import get_insight_module
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class InsightModuleParams(BaseModel):
+class InsightModuleParams(McpToolParams):
     """Parameters for insight module tool"""
 
     module_id: str = Field(..., description="The ID of the insight module to retrieve")

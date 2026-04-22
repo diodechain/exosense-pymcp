@@ -2,16 +2,17 @@
 
 import re
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.groups import get_all_groups
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, asset_to_structured
 
 UUID_REGEX = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 
-class GroupDetailParams(BaseModel):
+class GroupDetailParams(McpToolParams):
     group_id: str = Field(..., description="Group UUID")
     include_assets: bool = Field(False, description="Include assets in this group")
     include_devices: bool = Field(False, description="Include devices in this group")

@@ -2,9 +2,10 @@
 
 import re
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, field_validator, ValidationError
+from pydantic import Field, field_validator, ValidationError
 from ..graphql.groups import get_all_groups
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured, group_children_to_structured, asset_to_structured
 
@@ -14,7 +15,7 @@ UUID_REGEX = re.compile(
 )
 
 
-class GroupsParams(BaseModel):
+class GroupsParams(McpToolParams):
     """Parameters for groups tool"""
 
     group_type_id: Optional[str] = Field(None, description="Filter by group type ID (UUID). Omit to get all group types.")

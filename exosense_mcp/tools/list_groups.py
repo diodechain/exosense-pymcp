@@ -1,9 +1,10 @@
 """List groups (minimal: id, name, parent_id). Use for count, list, or search by name."""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.groups import get_groups_list
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response, group_to_structured
 
@@ -33,7 +34,7 @@ async def _fallback_searches_by_word(
     return fallback if fallback else None
 
 
-class ListGroupsParams(BaseModel):
+class ListGroupsParams(McpToolParams):
     limit: int = Field(25, ge=1, le=100, description="Max groups to return (default 25)")
     offset: int = Field(0, ge=0, description="Skip N groups for pagination")
     text: Optional[str] = Field(None, description="Search by group name or description (omit for no search)")

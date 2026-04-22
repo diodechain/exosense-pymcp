@@ -1,9 +1,10 @@
 """Find assets by fuzzy name matching"""
 
 from typing import Dict, Any, Optional
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.assets import get_assets
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
@@ -112,7 +113,7 @@ async def _fallback_searches_by_word(
     return fallback if fallback else None
 
 
-class FindAssetParams(BaseModel):
+class FindAssetParams(McpToolParams):
     """Parameters for find asset tool"""
 
     query: str = Field(..., min_length=1, description="Search query to find assets by name (e.g., 'my battery', 'battery bank')")

@@ -1,14 +1,15 @@
 """Get conditions"""
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.condition_policies import get_conditions
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class ConditionsParams(BaseModel):
+class ConditionsParams(McpToolParams):
     """Parameters for conditions tool"""
 
     query: Optional[List[Dict]] = Field(None, description="Query filters for conditions")

@@ -1,14 +1,15 @@
 """Get all available internal insight modules"""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.insight_modules import get_internal_insight_modules
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class InsightModulesParams(BaseModel):
+class InsightModulesParams(McpToolParams):
     """Parameters for insight modules tool"""
 
     limit: Optional[int] = Field(None, ge=1, description="Maximum number of modules to return")

@@ -2,14 +2,15 @@
 
 import json
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.assets import get_asset_statuses, get_assets
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class AssetStatusesParams(BaseModel):
+class AssetStatusesParams(McpToolParams):
     """Parameters for asset statuses tool"""
 
     asset_ids: Optional[List[str]] = Field(None, description="Optional list of specific asset IDs (UUIDs) to check. If not provided, will automatically fetch and check all assets (up to max_assets limit). You do NOT need to call get-assets first - this tool handles asset fetching internally.")

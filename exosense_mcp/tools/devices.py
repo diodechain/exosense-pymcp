@@ -1,14 +1,15 @@
 """Get devices from ExoSense with optional filtering"""
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.devices_products import get_devices
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class DevicesParams(BaseModel):
+class DevicesParams(McpToolParams):
     """Parameters for devices tool"""
 
     product: str = Field(..., description="Product ID (pid) to filter devices by")

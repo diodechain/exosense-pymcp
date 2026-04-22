@@ -1,14 +1,15 @@
 """Get condition comments"""
 
 from typing import Optional, Dict, Any
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import Field, ValidationError
 from ..graphql.condition_policies import get_condition_comments
 from ..types.graphql import Pagination
+from .mcp_params import McpToolParams
 from .types import ToolContext
 from ._helpers import pydantic_to_json_schema, format_success_response, format_error_response
 
 
-class ConditionCommentsParams(BaseModel):
+class ConditionCommentsParams(McpToolParams):
     """Parameters for condition comments tool"""
 
     condition_id: str = Field(..., description="The ID of the condition to get comments for")

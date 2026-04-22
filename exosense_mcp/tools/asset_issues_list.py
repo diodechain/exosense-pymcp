@@ -27,12 +27,58 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
     except ValidationError as e:
         return format_error_response(Exception(f"Invalid arguments: {e}"))
 
+    normalized_category = (args.filter_category or "").strip().lower() or None
+    normalized_level = (args.filter_level or "").strip().lower() or None
+
+    # If the model picks this tool for "online/healthy assets", route to statuses and
+    # return an online list instead of an empty "issues" response.
+    if normalized_level in {"online", "healthy"}:
+        status_args = {
+            "include_details": True,
+            "max_assets": args.max_assets,
+            "extra_status_data": False,
+        }
+        result = await asset_statuses.execute(status_args, context)
+        content = result.get("content", [])
+        if not content or content[0].get("type") != "text":
+            return result
+        import json
+        try:
+            data = json.loads(content[0]["text"])
+            if not data.get("success"):
+                return result
+            payload = data.get("data", {})
+            out = {
+                "total_assets_checked": payload.get("total_assets_checked", 0),
+                "assets_online": payload.get("assets_healthy", 0),
+                "assets_online_details": payload.get("assets_healthy_details", []),
+                "assets_online_total": payload.get("assets_healthy_total"),
+                "fallback_used": "online_query_routed_to_asset_statuses",
+            }
+            if normalized_category:
+                out["filter_applied"] = {"category": args.filter_category, "level": args.filter_level}
+            return format_success_response(
+                out,
+                "Interpreted this as an online/healthy asset request and returned online assets.",
+            )
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return result
+
+    valid_issue_levels = {"critical", "warning", "error", "alarm"}
+    if normalized_level and normalized_level not in valid_issue_levels:
+        return format_error_response(
+            Exception(
+                "Invalid filter_level for issues list. Use one of "
+                f"{sorted(valid_issue_levels)}. For online/healthy/offline lists, use exosense-get-asset-statuses."
+            )
+        )
+
     minimal_args = {
         "include_details": True,
         "max_assets": args.max_assets,
         "extra_status_data": False,
-        "filter_category": args.filter_category,
-        "filter_level": args.filter_level,
+        "filter_category": normalized_category,
+        "filter_level": normalized_level,
     }
     result = await asset_statuses.execute(minimal_args, context)
     content = result.get("content", [])
@@ -60,6 +106,6 @@ async def execute(arguments: Dict[str, Any], context: ToolContext) -> Dict[str, 
 schema = pydantic_to_json_schema(AssetIssuesListParams)
 TOOL_METADATA = {
     "name": "exosense-asset-issues-list",
-    "description": "Use for: 'What are the specific issues?', 'Which assets have problems?', 'How long has [asset/group] had issues?' - returns assets_with_issues_details including last_heard (ISO timestamp) per asset so you can compute or describe duration. List assets with issues, names of assets with critical timeouts. Optionally set filter_category and filter_level. For overview counts use exosense-asset-health-summary; for full status use exosense-get-asset-statuses.",
+    "description": "Use for: 'What are the specific issues?', 'Which assets have problems?', 'How long has [asset/group] had issues?' - returns assets_with_issues_details including last_heard (ISO timestamp) per asset so you can compute or describe duration. List assets with issues, names of assets with critical timeouts. Optionally set filter_category and filter_level. filter_level must be one of critical/warning/error/alarm. Do NOT use this for online/healthy/offline lists; use exosense-get-asset-statuses for those.",
     "inputSchema": schema,
 }
